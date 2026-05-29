@@ -13,6 +13,10 @@ venv/
 .coverage
 htmlcov/
 
+# Runtime service state (JSON snapshot)
+data/
+*.tmp
+
 # Editors / OS
 .idea/
 .vscode/

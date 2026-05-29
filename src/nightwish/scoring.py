@@ -26,6 +26,22 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, field
 
+#: Hub-update rules. All three are order-sensitive and fully incremental
+#: (no convergence iteration), per patent 10-0913256.
+#:
+#: * ``"count"``    — **patent claim 2 (청구항 2).** Every earlier linker's hub
+#:   rises by ``weight`` each time a later linker piles onto the same node
+#:   ("이후 다른 상위 노드가 추가로 링크될 때마다 1씩 증가"). With unit weights the
+#:   first discoverer of a node that later gets N linkers ends at hub N-1.
+#: * ``"sum"``      — **patent claim 3 (청구항 3).** Each earlier linker inherits
+#:   the *current hub* of every later linker ("먼저 링크한 상위 노드의 허브 지수는
+#:   추가로 링크되는 상위 노드들의 허브 지수를 계속하여 더한다").
+#: * ``"harmonic"`` — a design variant (the original MVP behaviour): the j-th
+#:   earlier linker receives ``weight / j``, so foresight decays smoothly with
+#:   how late you were. Not in the patent, but bandwagon-resistant and the
+#:   gentlest to bootstrap; kept as the default so existing behaviour is stable.
+HUB_MODES = ("harmonic", "count", "sum")
+
 
 @dataclass
 class ScoreEngine:
@@ -34,6 +50,11 @@ class ScoreEngine:
     A "link" is the event *evaluator E recognised content node N* (in this
     system: someone follows, forks from, or contributes to N). Links are fed in
     the order they happen; the engine never iterates to convergence.
+
+    ``mode`` selects the hub-update rule — see :data:`HUB_MODES`. The faithful
+    patent rules (``"count"`` / ``"sum"``) and the MVP variant (``"harmonic"``)
+    all agree on the *direction* (earlier beats later); they differ only in how
+    steeply foresight is rewarded.
     """
 
     #: node_id -> authority (value of the content)
@@ -42,6 +63,12 @@ class ScoreEngine:
     hub: dict[str, float] = field(default_factory=lambda: defaultdict(float))
     #: node_id -> evaluators in the order they linked (the "link order")
     _linkers: dict[str, list[str]] = field(default_factory=lambda: defaultdict(list))
+    #: hub-update rule; one of :data:`HUB_MODES`
+    mode: str = "harmonic"
+
+    def __post_init__(self) -> None:
+        if self.mode not in HUB_MODES:
+            raise ValueError(f"mode must be one of {HUB_MODES}, got {self.mode!r}")
 
     def link(self, evaluator: str, node_id: str, *, weight: float = 1.0) -> None:
         """Record that ``evaluator`` linked to ``node_id`` (the next in order).
@@ -49,19 +76,30 @@ class ScoreEngine:
         Two incremental effects, both order-sensitive:
 
         1. **Reward foresight.** Every *earlier* linker is validated by this new
-           follower. The j-th earlier linker receives ``weight / j`` of hub —
-           so the first discoverer keeps earning on every later follower while
-           late joiners earn almost nothing. This is what turns "popularity"
-           into "who saw it first".
+           follower, so the first discoverer keeps earning on every later
+           follower while late joiners earn almost nothing — turning
+           "popularity" into "who saw it first". *How much* each earlier linker
+           gains is set by :data:`mode <HUB_MODES>`.
         2. **Confer authority.** ``node_id`` gains authority equal to a base
            amount plus the *current hub* of the linker — a high-hub evaluator's
-           endorsement is worth more than a stranger's.
+           endorsement is worth more than a stranger's (수학식 10).
         """
         if weight <= 0:
             raise ValueError("link weight must be positive")
 
-        for j, earlier in enumerate(self._linkers[node_id], start=1):
-            self.hub[earlier] += weight / j
+        earlier_linkers = self._linkers[node_id]
+        if self.mode == "harmonic":
+            for j, earlier in enumerate(earlier_linkers, start=1):
+                self.hub[earlier] += weight / j
+        elif self.mode == "count":
+            # 청구항 2: every earlier linker +weight per later link.
+            for earlier in earlier_linkers:
+                self.hub[earlier] += weight
+        else:  # "sum" — 청구항 3
+            # Every earlier linker inherits this new linker's current hub.
+            incoming_hub = self.hub[evaluator]
+            for earlier in earlier_linkers:
+                self.hub[earlier] += weight * incoming_hub
 
         self._linkers[node_id].append(evaluator)
         self.authority[node_id] += weight * (1.0 + self.hub[evaluator])

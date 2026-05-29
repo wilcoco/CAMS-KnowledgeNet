@@ -22,7 +22,9 @@
 | **설계 비평/압박 테스트** | [`docs/critique.md`](docs/critique.md) | 화폐공학 균열 · 폰지 방어 · 거버넌스 급소 · 사상적 검토를 적대적으로 재검 |
 | **프로토타입 매핑** | [`docs/prototype.md`](docs/prototype.md) | 설계 개념 → 코드 1:1 대응표 |
 | **동작하는 MVP** | [`src/nightwish/`](src/nightwish/) | 온톨로지 트리 · 허브/권위 엔진 · 포인트 경제 · **검증 닻** · **거버넌스** · 질의 파이프라인 |
-| **테스트** | [`tests/`](tests/) | 47개 단위 테스트 (불변식 검증) |
+| **HTTP 서비스 + 웹 UI** | [`src/nightwish/service.py`](src/nightwish/service.py) · [`static/`](src/nightwish/static/) | FastAPI 백엔드(질문/포크/기여/스테이킹/배당/검증) + 트리를 보고 조작하는 웹 화면. JSON 스냅샷 영속화([`store.py`](src/nightwish/store.py)) |
+| **기반 특허 분석** | [`docs/patents/`](docs/patents/) | 등록공보 원문 + 1차 출처 대조 분석(서지·청구항·법적상태) |
+| **테스트** | [`tests/`](tests/) | 56개 단위 테스트 (불변식 · 특허 청구항 수치 · 서비스 E2E) |
 | **예제** | [`examples/`](examples/) | 첫 바퀴 시뮬레이션 · 배당 라우팅 · **검증 닻 첫 바퀴(P0)** |
 
 ---
@@ -34,7 +36,8 @@
 
 1. **`scoring.py`** — 특허 10-0913256의 **증분 허브/권위 엔진.** 수렴 반복연산을
    *링크 순서*로 치환("링크 순서 가중") → 신규 콘텐츠 실시간 평가. 평가의 화폐는
-   *인기*가 아니라 *안목(선행 발견력)*.
+   *인기*가 아니라 *안목(선행 발견력)*. 허브 산식은 선택 가능: **`count`(청구항 2)
+   · `sum`(청구항 3)** = 특허 충실, **`harmonic`** = MVP 변형(기본·부트스트랩 친화).
 2. **`tree.py`** — **살아있는 온톨로지 트리.** 노드 = 인간Q + AI답. 행위 =
    계승(follow) · 분기(fork) · 추가 기여(contribute). 핵심 규칙 **"포인트 크기 =
    기여 크기"**. 죽지 않는 가지(잠복·부활).
@@ -56,14 +59,28 @@
 ## 빠른 시작
 
 ```bash
-pip install -e .            # 패키지 설치 (의존성 없음; dev엔 pytest)
+pip install -e .            # 코어 라이브러리 (의존성 없음)
 
 python -m nightwish.simulation    # §7 "첫 바퀴" 시뮬레이션 리포트
 python examples/dividend_demo.py  # 부가가치-게이트 배당 라우팅 데모
 python examples/verified_wheel.py # [P0] 검증 닻이 배당을 여는 첫 바퀴
 
-python -m pytest -q               # 47개 테스트
+pip install -e ".[dev]"           # + pytest, httpx
+python -m pytest -q               # 56개 테스트
 ```
+
+### 서비스 실행 (HTTP API + 웹 UI)
+
+```bash
+pip install -e ".[service]"       # + fastapi, uvicorn, pydantic
+nightwish-serve                   # 또는: uvicorn nightwish.service:app
+# → http://127.0.0.1:8000/  에서 질문→검색/AI/사람, 포크·기여·스테이킹·검증을 직접 조작
+```
+
+- 상태는 `data/state.json`(환경변수 `NIGHTWISH_DB`로 변경) 스냅샷에 영속화 — 재시작에도 트리·원장·점수 유지.
+- 스테이지 ②의 **AI는 교체 가능**: 기본은 키·네트워크 없이 도는 오프라인 스텁(`offline_ai`),
+  실모델은 `nightwish.service.set_ai(fn)`으로 주입. 질문에 `[tacit]`를 넣으면 AI가 사양 → 사람 라우팅(스테이지 ③)을 시연.
+- 주요 엔드포인트: `POST /api/ask`, `/api/nodes/{id}/{follow,fork,contribute,verify}`, `POST /api/mint`, `GET /api/{tree,scores,ledger,state}`. OpenAPI 문서는 `/docs`.
 
 ### 첫 바퀴 시뮬레이션 출력 (요약)
 

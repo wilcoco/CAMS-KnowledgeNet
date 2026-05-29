@@ -13,13 +13,18 @@ authors = [{ name = "Json (홍정수)" }]
 keywords = ["ontology", "knowledge", "hub-authority", "tokenomics", "tacit-knowledge"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "httpx>=0.24"]
+service = ["fastapi>=0.110", "uvicorn>=0.27", "pydantic>=2.0"]
 
 [project.scripts]
 nightwish-firstwheel = "nightwish.simulation:main"
+nightwish-serve = "nightwish.service:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+nightwish = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
