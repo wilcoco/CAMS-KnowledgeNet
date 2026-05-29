@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nightwish"
+version = "0.1.0"
+description = "Living-ontology knowledge evaluation & reward system (MVP prototype)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary - 대외비 / Confidential" }
+authors = [{ name = "Json (홍정수)" }]
+keywords = ["ontology", "knowledge", "hub-authority", "tokenomics", "tacit-knowledge"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+nightwish-firstwheel = "nightwish.simulation:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
