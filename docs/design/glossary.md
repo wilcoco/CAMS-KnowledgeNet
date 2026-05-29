@@ -18,4 +18,8 @@
 | **소각 싱크 (Burn)** | UBI 인플레 방어용 디플레 장치. | `economy.Ledger.burn` |
 | **색인 재고 (Index inventory)** | 검색에 걸려 갖다 쓰이는, 흔하고 대체 가능한 콘텐츠. (네이버 모델의 본질) | — |
 | **암묵지 (Tacit knowledge)** | 형식화되지 않은, 체화된 지식 (폴라니: "말할 수 있는 것보다 많이 안다"). | — |
-| **외부 현실 닻 (Ground truth)** | "부가가치=동의"의 순환을 닫는 유일한 외부 검증 (제조: 수율·물성). | `docs/roadmap.md` §검증 닻 |
+| **외부 현실 닻 (Ground truth)** | "부가가치=동의"의 순환을 닫는 유일한 외부 검증 (제조: 수율·물성). | `verification.VerificationRegistry` |
+| **검증된 가지 (Verified branch)** | 가지 내 한 노드라도 외부 측정으로 검증되면 그 가지 전체가 배당 자격. | `Economy.distribute_dividend(is_verified=)` |
+| **배당 시간붕괴 (Dividend decay)** | 갱신 안 된 오래된 지분의 배당 가중이 0으로 수렴 → 자본 자기증식 차단. | `distribute_dividend(ages=, half_life=)` |
+| **잠복 포인트 회수 (Reclaim)** | 죽지 않는 가지에 잠긴 포인트를 *소각 않고* 유동성 풀로 환원, 부활 시 복원. | `Economy.reclaim_dormant` / `restore_on_revival` |
+| **거버넌스 사전공약 (Pre-commitment)** | 참여자 N명 도달 시 규칙변경권이 관리자→합의체로 자동 이전 (코드가 헌법). | `governance.Governance` |

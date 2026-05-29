@@ -21,9 +21,9 @@
 | **실행 로드맵** | [`docs/roadmap.md`](docs/roadmap.md) | 부트스트랩(첫 카토 온보딩) · MVP 우선순위 · 검증 닻 · 화폐공학 · 거버넌스 · 법무 |
 | **설계 비평/압박 테스트** | [`docs/critique.md`](docs/critique.md) | 화폐공학 균열 · 폰지 방어 · 거버넌스 급소 · 사상적 검토를 적대적으로 재검 |
 | **프로토타입 매핑** | [`docs/prototype.md`](docs/prototype.md) | 설계 개념 → 코드 1:1 대응표 |
-| **동작하는 MVP** | [`src/nightwish/`](src/nightwish/) | 온톨로지 트리 · 허브/권위 엔진 · 포인트 경제 · 질의 파이프라인 |
-| **테스트** | [`tests/`](tests/) | 28개 단위 테스트 (불변식 검증) |
-| **예제** | [`examples/`](examples/) | 첫 바퀴 시뮬레이션 · 배당 라우팅 데모 |
+| **동작하는 MVP** | [`src/nightwish/`](src/nightwish/) | 온톨로지 트리 · 허브/권위 엔진 · 포인트 경제 · **검증 닻** · **거버넌스** · 질의 파이프라인 |
+| **테스트** | [`tests/`](tests/) | 47개 단위 테스트 (불변식 검증) |
+| **예제** | [`examples/`](examples/) | 첫 바퀴 시뮬레이션 · 배당 라우팅 · **검증 닻 첫 바퀴(P0)** |
 
 ---
 
@@ -42,6 +42,11 @@
    *부가가치로 자격이 걸린* 배당(빈손 노드 우회) · 에스크로 현상금 · 소각 싱크.
 4. **`pipeline.py`** — **3단계 질의 흐름** (검색 → AI → 사람).
 
+> **2차 이터레이션** — 비평(`critique.md`)이 지목한 균열을 코드로 닫았다:
+> **`verification.py`**(외부 현실 닻 → 검증된 가지에서만 배당) · **`governance.py`**
+> (참여자 N명 시 규칙변경권 자동 분권) · 배당 **시간붕괴**(자본증식 차단)와
+> **잠복 포인트 회수**(인플레-잠김 딜레마)는 `economy.py`에 추가됨.
+
 `simulation.py`가 이들을 엮어 설계 문서 §7의 **"첫 바퀴" 시뮬레이션**을 재현한다
 — 최종 원장이 설계 수치와 정확히 일치하고, **암묵지 병목**(카토의 손끝 지식이
 끝내 안 풀림)을 드러낸다.
@@ -53,10 +58,11 @@
 ```bash
 pip install -e .            # 패키지 설치 (의존성 없음; dev엔 pytest)
 
-python -m nightwish.simulation   # §7 "첫 바퀴" 시뮬레이션 리포트
-python examples/dividend_demo.py # 부가가치-게이트 배당 라우팅 데모
+python -m nightwish.simulation    # §7 "첫 바퀴" 시뮬레이션 리포트
+python examples/dividend_demo.py  # 부가가치-게이트 배당 라우팅 데모
+python examples/verified_wheel.py # [P0] 검증 닻이 배당을 여는 첫 바퀴
 
-python -m pytest -q              # 28개 테스트
+python -m pytest -q               # 47개 테스트
 ```
 
 ### 첫 바퀴 시뮬레이션 출력 (요약)
