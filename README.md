@@ -23,8 +23,8 @@
 | **프로토타입 매핑** | [`docs/prototype.md`](docs/prototype.md) | 설계 개념 → 코드 1:1 대응표 |
 | **외부 레퍼런스** | [`docs/related/`](docs/related/) | Karpathy "LLM Wiki"(2026-04) 비교 — 같은 RAG 비판, 다른 답(수렴 vs 경합 보존) |
 | **동작하는 MVP** | [`src/nightwish/`](src/nightwish/) | 온톨로지 트리 · 허브/권위 엔진 · 포인트 경제 · **검증 닻** · **거버넌스** · 질의 파이프라인 |
-| **동작하는 서비스(MVS)** | [`src/nightwish/wiki/`](src/nightwish/wiki/) · [`webapp/`](src/nightwish/webapp/) | **검증된 소셜 위키** — 카파시/옵시디안 위키 + 소셜 쉐어링 + 인증 투자 (FastAPI). 스코프: [`docs/service-mvs.md`](docs/service-mvs.md) |
-| **테스트** | [`tests/`](tests/) | 65개 단위 테스트 (불변식 검증) |
+| **동작하는 서비스(MVS)** | [`src/nightwish/wiki/`](src/nightwish/wiki/) · [`webapp/`](src/nightwish/webapp/) | **검증된 소셜 위키** — 카파시/옵시디안 위키 + 소셜 쉐어링 + 인증 투자. FastAPI + **JSON API** + **Postgres/SQLite 영속** + **실 LLM 북키핑**. 스코프: [`docs/service-mvs.md`](docs/service-mvs.md) · 배포: [`docs/deploy-railway.md`](docs/deploy-railway.md) |
+| **테스트** | [`tests/`](tests/) | 72개 단위 테스트 (불변식 검증) |
 | **예제** | [`examples/`](examples/) | 첫 바퀴 시뮬레이션 · 배당 라우팅 · **검증 닻 첫 바퀴(P0)** |
 
 ---
@@ -74,12 +74,17 @@ python -m pytest -q               # 65개 테스트
 
 ```bash
 pip install -e ".[service]"                 # 서비스 의존성 (코어는 여전히 0)
-uvicorn nightwish.webapp.app:app --reload   # http://127.0.0.1:8000
+uvicorn nightwish.webapp.app:app --reload   # http://127.0.0.1:8000  (HTML + /api/*)
 ```
 
-이름으로 시작 → 페이지 작성(`[[위키링크]]`, LLM 북키핑이 요약·링크 자동 추출)
-→ 공유(피드 노출) → 투자(스테이킹) → **외부 측정으로 인증**. 인증된 페이지에
-후속 투자가 들어오면 일부가 *먼저 알아본 투자자*에게 흐른다(인증 투자).
+이름으로 시작 → 페이지 작성(`[[위키링크]]`, LLM 북키핑이 요약·엔티티·링크 자동
+추출) → 공유(피드 노출) → 투자(스테이킹) → **외부 측정으로 인증**. 인증된
+페이지에 후속 투자가 들어오면 일부가 *먼저 알아본 투자자*에게 흐른다(인증 투자).
+
+- **영속성:** `DATABASE_URL` 미설정 시 SQLite 파일, 설정 시 Postgres 등.
+- **실 LLM 북키핑:** `ANTHROPIC_API_KEY` 설정 시 Claude(`claude-opus-4-8`, `NIGHTWISH_LLM_MODEL`로 변경 가능)로 요약·엔티티 추출; 없으면 결정론적 stub.
+- **JSON API:** `GET /api/health`·`/api/feed`, `POST /api/pages`·`/invest`·`/verify` (`X-User` 헤더).
+- **배포:** Railway + Postgres 한 방 가이드 → [`docs/deploy-railway.md`](docs/deploy-railway.md).
 
 ### 첫 바퀴 시뮬레이션 출력 (요약)
 

@@ -1,0 +1,3 @@
+# Railway/Nixpacks 배포용 — 로컬 패키지(+service 추가의존성)를 설치한다.
+# 도메인 코어는 의존성 0이지만, 웹 서비스는 아래 extras가 필요하다.
+-e .[service]

@@ -41,22 +41,41 @@
       <p class="muted">투자하려면 먼저 시작(로그인)하세요.</p>
     {% endif %}
     {% if investors %}
-      <ul style="margin-top:.6rem;">
+      <table style="width:100%; margin-top:.6rem; border-collapse:collapse;">
+        <tr class="muted" style="text-align:left;">
+          <th>투자자</th><th style="text-align:right;">투자</th>
+          <th style="text-align:right;">수익</th></tr>
         {% for it in investors %}
-          <li>{{ it.user }} — {{ "%.1f"|format(it.amount) }}P</li>
+          <tr style="border-top:1px solid var(--line);">
+            <td>{{ it.user }}</td>
+            <td style="text-align:right;">{{ "%.1f"|format(it.amount) }}P</td>
+            <td style="text-align:right; color:{{ '#15803d' if it.earned > 0 else 'var(--muted)' }};">
+              {{ '+%.2f'|format(it.earned) if it.earned > 0 else '–' }}P</td>
+          </tr>
         {% endfor %}
-      </ul>
+      </table>
+      <p class="muted" style="margin-top:.4rem;">수익 = 인증 후 후속 투자에서 흘러온 보상.</p>
     {% endif %}
   </div>
 
   <div class="card">
-    <h3>🔬 인증 (외부 측정)</h3>
-    {% if measurements %}
-      <ul>
-        {% for m in measurements %}
-          <li>{{ m.metric }}: {{ m.baseline }} → {{ m.observed }}
-            ({{ "%.0f"|format(m.relative_improvement*100) }}%)
-            {% if m.passes %}<span class="badge">통과</span>{% else %}
+    <h3>🔬 인증 (외부 측정) · 이력</h3>
+    {% if chart %}
+      <div class="chart">
+        {% for c in chart %}
+          {% set h = (c.pct if c.pct > 0 else 0) %}
+          {% set hh = (h if h < 100 else 100) %}
+          <div class="bar-wrap" title="{{ c.metric }}: {{ '%.0f'|format(c.pct) }}%">
+            <div class="bar {{ 'pass' if c.passes else 'fail' }}"
+                 style="height:{{ (hh * 0.9 + 6)|round(1) }}px"></div>
+            <div class="bar-label">{{ '%.0f'|format(c.pct) }}%</div>
+          </div>
+        {% endfor %}
+      </div>
+      <ul style="margin-top:.4rem;">
+        {% for c in chart %}
+          <li>{{ c.metric }} — 개선 {{ '%.0f'|format(c.pct) }}%
+            {% if c.passes %}<span class="badge">통과</span>{% else %}
             <span class="muted">미달</span>{% endif %}</li>
         {% endfor %}
       </ul>

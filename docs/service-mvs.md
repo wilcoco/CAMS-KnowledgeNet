@@ -3,9 +3,9 @@
 > "카파시/옵시디안식 위키 **+ 소셜 쉐어링 + 인증 투자**만" — 사용자 요청대로
 > 풀 Nightwish가 아니라 *최소 가치 서비스*만 구현한다.
 
-기존 도메인 코어(`economy`, `verification`)를 **그대로 재사용**하고, 그 위에
-위키·소셜·투자 레이어를 얹는다. (이전에 합의한 "도메인 코어 = 라이브러리,
-서비스 = 어댑터" 전략.)
+도메인 코어(`verification` 등)를 재사용하고, 그 위에 위키·소셜·투자 레이어를
+얹는다. **영속성(Postgres/SQLite) · JSON API · 실 LLM 북키핑**을 갖춘 배포 가능한
+구성이다. 배포는 [`deploy-railway.md`](deploy-railway.md) 참조.
 
 ---
 
@@ -14,7 +14,9 @@
 | 기능 | 출처 개념 | 구현 |
 |------|----------|------|
 | **마크다운 위키 + `[[위키링크]]`** | 옵시디안 / 카파시 wiki 층 | `wiki/models.py`, `webapp/render.py` |
-| **LLM 북키핑** (요약·링크 추출) | 카파시 "LLM이 북키핑" | `wiki/bookkeeper.py` (stub, 실 LLM 어댑터 교체 가능) |
+| **LLM 북키핑** (요약·엔티티·링크) | 카파시 "LLM이 북키핑" | `wiki/bookkeeper.py` — 실 Claude(`LLMBookkeeper`, ANTHROPIC_API_KEY) / 키 없으면 stub 폴백 |
+| **영속성** (재시작해도 유지) | 우리 추가 | `wiki/db.py` — SQLAlchemy(로컬 SQLite ↔ Railway Postgres, `DATABASE_URL`) |
+| **JSON API 서버** | 우리 추가 | `webapp/api.py` — `/api/*` (피드·페이지·투자·인증), `X-User` 헤더 |
 | **백링크** (누가 이 페이지를 링크했나) | 옵시디안 | `WikiService.backlinks` |
 | **소셜 쉐어링** (공유·피드·다중 사용자) | 우리 추가 | `WikiService.share` / `feed` |
 | **인증** (외부 측정으로 검증) | Nightwish 검증 닻 | `verification.py` 재사용 |
@@ -44,10 +46,15 @@
 ## 실행
 
 ```bash
-pip install fastapi uvicorn jinja2          # 서비스 의존성 (코어는 여전히 0)
-uvicorn nightwish.webapp.app:app --reload   # http://127.0.0.1:8000
-python -m pytest tests/test_wiki_service.py tests/test_webapp.py -q
+pip install -e ".[service]"                  # 서비스 의존성 (코어는 여전히 0)
+uvicorn nightwish.webapp.app:app --reload    # http://127.0.0.1:8000
+python -m pytest tests/test_wiki_service.py tests/test_webapp.py tests/test_api.py -q
 ```
 
-화면: 홈(공유 피드 + 내 페이지) · 페이지 보기(요약·백링크·인증 배지·투자 현황·
-투자/인증 폼) · 새 페이지 작성. 로그인은 이름만 입력하는 최소 형태(MVS).
+- **영속성:** `DATABASE_URL` 미설정 시 `./nightwish.db`(SQLite), 설정 시 그 DB(Postgres 등).
+- **LLM:** `ANTHROPIC_API_KEY` 설정 시 실제 Claude로 북키핑(요약·엔티티·링크), 없으면 stub.
+- **배포:** Railway + Postgres 가이드는 [`deploy-railway.md`](deploy-railway.md).
+
+화면: 홈(공유 피드 + 내 페이지) · 페이지 보기(요약·백링크·**인증 이력 차트**·
+**투자 수익**·투자/인증 폼) · 새 페이지. JSON API는 `/api/*`. 로그인은 이름만
+입력하는 최소 형태(MVS).

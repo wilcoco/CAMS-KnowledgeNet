@@ -1,104 +1,137 @@
-"""FastAPI 앱 — 검증된 소셜 위키 (MVS).
+"""FastAPI 앱 — 검증된 소셜 위키 (MVS), 영속 + API 서버.
 
-실행: ``uvicorn nightwish.webapp.app:app --reload`` → http://127.0.0.1:8000
+실행(로컬):   uvicorn nightwish.webapp.app:app --reload   → http://127.0.0.1:8000
+실행(배포):   uvicorn nightwish.webapp.app:app --host 0.0.0.0 --port $PORT
 
-상태는 인메모리(:class:`WikiService` 단일 인스턴스)라 서버 재시작 시 초기화된다.
-로그인은 이름만 입력하는 최소 형태(쿠키에 user id 저장) — 인증·보안은 MVS 범위 밖.
+상태는 `DATABASE_URL`(미설정 시 SQLite 파일)에 영속한다. 로그인은 이름만 입력하는
+최소 형태(쿠키에 user id) — 인증·보안은 MVS 범위 밖. JSON API는 `/api/*`.
 """
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Request
+from fastapi import Depends, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from nightwish.economy import InsufficientPoints
 from nightwish.verification import Direction, Measurement
 from nightwish.webapp.render import render_markdown
-from nightwish.wiki import WikiError, WikiService
+from nightwish.wiki import (
+    InsufficientPoints,
+    WikiError,
+    WikiService,
+    init_db,
+    make_bookkeeper,
+    make_engine,
+    make_session_factory,
+)
 
 BASE = Path(__file__).parent
 templates = Jinja2Templates(directory=str(BASE / "templates"))
 
-app = FastAPI(title="Nightwish — 검증된 소셜 위키 (MVS)")
-service = WikiService()
-
 COOKIE = "nw_user"
 
+# 엔진/세션/북키퍼는 프로세스 단위로 1회 구성
+engine = make_engine()
+SessionLocal = make_session_factory(engine)
+bookkeeper = make_bookkeeper()
 
-# -- helpers ------------------------------------------------------------------
-def current_user(request: Request):
-    uid = request.cookies.get(COOKIE)
-    return service.users.get(uid) if uid else None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db(engine)
+    yield
+
+
+app = FastAPI(title="Nightwish — 검증된 소셜 위키 (MVS)", lifespan=lifespan)
+
+
+# -- 의존성 -------------------------------------------------------------------
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def get_service(db=Depends(get_db)) -> WikiService:
+    return WikiService(db, bookkeeper)
+
+
+def current_user(request: Request, svc: WikiService):
+    return svc.get_user(request.cookies.get(COOKIE))
 
 
 def _redirect(url: str) -> RedirectResponse:
     return RedirectResponse(url, status_code=303)
 
 
-def _page_view(request: Request, slug: str, error: str | None = None):
-    page = service.pages[slug]
-    user = current_user(request)
-    existing = set(service.pages)
-    investors = [
-        {"user": service.users[uid].display_name, "amount": amt}
-        for uid, amt in sorted(
-            service.investment(slug).items(), key=lambda kv: -kv[1]
-        )
-        if amt > 1e-9
+# API 라우터 (정의는 api.py) — 그 `_svc` 의존성을 실제 get_service로 연결
+from nightwish.webapp import api as api_module  # noqa: E402
+
+app.include_router(api_module.router)
+app.dependency_overrides[api_module._svc] = get_service
+
+
+# -- HTML 페이지 뷰 -----------------------------------------------------------
+def _page_view(request, svc, slug, user, error=None):
+    page = svc.get_page(slug)
+    # 존재하는 슬러그 집합 (위키링크가 깨졌는지 표시용)
+    from sqlalchemy import select
+
+    from nightwish.wiki.db import WikiPage
+    existing = set(svc.db.scalars(select(WikiPage.slug)))
+    measurements = svc.measurements(slug)
+    chart = [
+        {"metric": m.metric,
+         "pct": svc._row_to_measurement(m).relative_improvement * 100,
+         "passes": svc._row_to_measurement(m).passes}
+        for m in measurements
     ]
     return templates.TemplateResponse(
-        request,
-        "page.html",
+        request, "page.html",
         {
             "user": user,
-            "balance": service.balance(user.id) if user else 0.0,
+            "balance": user.balance if user else 0.0,
             "page": page,
             "body_html": render_markdown(page.body, existing),
-            "author": service.users[page.author_id].display_name,
-            "verified": service.is_verified(slug),
-            "measurements": service.verification.results.get(slug, []),
-            "backlinks": service.backlinks(slug),
-            "broken": service.broken_links(slug),
-            "investors": investors,
-            "total_invested": service.total_invested(slug),
+            "author": (svc.get_user(page.author_id).display_name
+                       if svc.get_user(page.author_id) else page.author_id),
+            "verified": svc.is_verified(slug),
+            "chart": chart,
+            "backlinks": svc.backlinks(slug),
+            "broken": svc.broken_links(slug),
+            "investors": svc.investors(slug),
+            "total_invested": svc.total_invested(slug),
             "error": error,
-            "Direction": Direction,
         },
     )
 
 
-# -- routes -------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
-def home(request: Request):
-    user = current_user(request)
-    mine = (
-        sorted(
-            [p for p in service.pages.values() if p.author_id == user.id],
-            key=lambda p: p.updated_at, reverse=True,
-        )
-        if user else []
-    )
+def home(request: Request, svc: WikiService = Depends(get_service)):
+    user = current_user(request, svc)
+    mine = svc.list_user_pages(user.id) if user else []
     return templates.TemplateResponse(
-        request,
-        "home.html",
+        request, "home.html",
         {
             "user": user,
-            "balance": service.balance(user.id) if user else 0.0,
-            "feed": service.feed(),
+            "balance": user.balance if user else 0.0,
+            "feed": svc.feed(),
             "mine": mine,
-            "verified_set": {s for s in service.pages if service.is_verified(s)},
-            "service": service,
+            "verified_set": svc.verified_slugs(),
+            "svc": svc,
         },
     )
 
 
 @app.post("/login")
-def login(name: str = Form(...)):
+def login(name: str = Form(...), svc: WikiService = Depends(get_service)):
     try:
-        user = service.ensure_user(name)
+        user = svc.ensure_user(name)
     except WikiError:
         return _redirect("/")
     resp = _redirect("/")
@@ -114,13 +147,12 @@ def logout():
 
 
 @app.get("/wiki/new", response_class=HTMLResponse)
-def new_page_form(request: Request):
-    user = current_user(request)
+def new_page_form(request: Request, svc: WikiService = Depends(get_service)):
+    user = current_user(request, svc)
     if not user:
         return _redirect("/")
     return templates.TemplateResponse(
-        request, "new.html",
-        {"user": user, "balance": service.balance(user.id)},
+        request, "new.html", {"user": user, "balance": user.balance}
     )
 
 
@@ -130,53 +162,54 @@ def create_page(
     title: str = Form(...),
     body: str = Form(""),
     shared: str = Form(None),
+    svc: WikiService = Depends(get_service),
 ):
-    user = current_user(request)
+    user = current_user(request, svc)
     if not user:
         return _redirect("/")
     try:
-        page = service.create_page(
-            user.id, title, body, shared=bool(shared)
-        )
+        page = svc.create_page(user.id, title, body, shared=bool(shared))
     except WikiError:
         return _redirect("/wiki/new")
     return _redirect(f"/wiki/{page.slug}")
 
 
 @app.get("/wiki/{slug}", response_class=HTMLResponse)
-def view_page(request: Request, slug: str):
-    if slug not in service.pages:
+def view_page(request: Request, slug: str, svc: WikiService = Depends(get_service)):
+    user = current_user(request, svc)
+    if svc.get_page(slug) is None:
         return templates.TemplateResponse(
-            request, "missing.html",
-            {"user": current_user(request), "slug": slug},
-            status_code=404,
+            request, "missing.html", {"user": user, "slug": slug}, status_code=404
         )
-    return _page_view(request, slug)
+    return _page_view(request, svc, slug, user)
 
 
 @app.post("/wiki/{slug}/share")
-def toggle_share(request: Request, slug: str):
-    if slug in service.pages:
-        service.set_shared(slug, not service.pages[slug].shared)
+def toggle_share(request: Request, slug: str, svc: WikiService = Depends(get_service)):
+    page = svc.get_page(slug)
+    if page is not None:
+        svc.set_shared(slug, not page.shared)
     return _redirect(f"/wiki/{slug}")
 
 
 @app.post("/wiki/{slug}/edit")
-def edit_page(request: Request, slug: str, body: str = Form("")):
-    if slug in service.pages:
-        service.edit_page(slug, body)
+def edit_page(request: Request, slug: str, body: str = Form(""),
+              svc: WikiService = Depends(get_service)):
+    if svc.get_page(slug) is not None:
+        svc.edit_page(slug, body)
     return _redirect(f"/wiki/{slug}")
 
 
 @app.post("/wiki/{slug}/invest")
-def invest(request: Request, slug: str, amount: float = Form(...)):
-    user = current_user(request)
-    if not user or slug not in service.pages:
+def invest(request: Request, slug: str, amount: float = Form(...),
+           svc: WikiService = Depends(get_service)):
+    user = current_user(request, svc)
+    if not user or svc.get_page(slug) is None:
         return _redirect(f"/wiki/{slug}")
     try:
-        service.invest(user.id, slug, amount)
+        svc.invest(user.id, slug, amount)
     except (WikiError, InsufficientPoints) as exc:
-        return _page_view(request, slug, error=str(exc))
+        return _page_view(request, svc, slug, user, error=str(exc))
     return _redirect(f"/wiki/{slug}")
 
 
@@ -189,12 +222,11 @@ def verify(
     observed: float = Form(...),
     direction: str = Form("higher_better"),
     min_rel_improvement: float = Form(0.0),
+    svc: WikiService = Depends(get_service),
 ):
-    if slug not in service.pages:
-        return _redirect(f"/wiki/{slug}")
-    m = Measurement(
-        metric=metric, baseline=baseline, observed=observed,
-        direction=Direction(direction), min_rel_improvement=min_rel_improvement,
-    )
-    service.verify(slug, m)
+    if svc.get_page(slug) is not None:
+        svc.verify(slug, Measurement(
+            metric=metric, baseline=baseline, observed=observed,
+            direction=Direction(direction), min_rel_improvement=min_rel_improvement,
+        ))
     return _redirect(f"/wiki/{slug}")

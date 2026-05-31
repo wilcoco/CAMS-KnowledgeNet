@@ -13,6 +13,10 @@ venv/
 .coverage
 htmlcov/
 
+# Local DB / secrets
+*.db
+.env
+
 # Editors / OS
 .idea/
 .vscode/

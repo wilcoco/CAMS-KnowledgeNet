@@ -20,8 +20,8 @@
           <a href="/wiki/{{ p.slug }}"><strong>{{ p.title }}</strong></a>
           {% if p.slug in verified_set %}<span class="badge">✓ 인증됨</span>{% endif %}
           <div class="muted">{{ p.summary or "(요약 없음)" }}</div>
-          <div class="muted">by {{ service.users[p.author_id].display_name }}
-            · 투자 {{ "%.0f"|format(service.total_invested(p.slug)) }}P</div>
+          <div class="muted">by {{ svc.get_user(p.author_id).display_name }}
+            · 투자 {{ "%.0f"|format(svc.total_invested(p.slug)) }}P</div>
         </div>
       </div>
     {% endfor %}
