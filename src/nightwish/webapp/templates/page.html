@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}{{ page.title }}{% endblock %}
+{% block body %}
+
+{% if error %}<div class="err">{{ error }}</div>{% endif %}
+
+<div class="card">
+  <div class="row" style="justify-content:space-between;">
+    <h1 style="margin:.2rem 0;">{{ page.title }}
+      {% if verified %}<span class="badge">✓ 인증됨</span>{% endif %}
+    </h1>
+    <form class="inline" method="post" action="/wiki/{{ page.slug }}/share">
+      <button class="secondary" type="submit">
+        {% if page.shared %}🔒 공유 해제{% else %}📡 공유하기{% endif %}
+      </button>
+    </form>
+  </div>
+  <div class="muted">by {{ author }} · 투자 합계
+    <strong>{{ "%.0f"|format(total_invested) }}P</strong></div>
+  <hr style="border:0;border-top:1px solid var(--line)">
+  <div class="body">{{ body_html|safe }}</div>
+</div>
+
+<div class="grid2">
+  <div class="card">
+    <h3>💰 투자 (인증 투자)</h3>
+    {% if verified %}
+      <p class="muted">이 페이지는 인증되었습니다. 지금 투자하면, 일부가
+        <strong>먼저 투자한 사람</strong>에게 흐릅니다.</p>
+    {% else %}
+      <p class="muted">아직 미인증. 투자는 잠기며, 인증 전엔 선행자 보상이 없습니다.</p>
+    {% endif %}
+    {% if user %}
+      <form class="row" method="post" action="/wiki/{{ page.slug }}/invest">
+        <input type="number" name="amount" min="1" step="1" placeholder="포인트"
+               style="width:8rem" required>
+        <button type="submit">투자</button>
+        <span class="muted">잔액 {{ "%.0f"|format(balance) }}P</span>
+      </form>
+    {% else %}
+      <p class="muted">투자하려면 먼저 시작(로그인)하세요.</p>
+    {% endif %}
+    {% if investors %}
+      <ul style="margin-top:.6rem;">
+        {% for it in investors %}
+          <li>{{ it.user }} — {{ "%.1f"|format(it.amount) }}P</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>🔬 인증 (외부 측정)</h3>
+    {% if measurements %}
+      <ul>
+        {% for m in measurements %}
+          <li>{{ m.metric }}: {{ m.baseline }} → {{ m.observed }}
+            ({{ "%.0f"|format(m.relative_improvement*100) }}%)
+            {% if m.passes %}<span class="badge">통과</span>{% else %}
+            <span class="muted">미달</span>{% endif %}</li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">아직 측정 없음.</p>
+    {% endif %}
+    <form method="post" action="/wiki/{{ page.slug }}/verify">
+      <div class="row">
+        <input type="text" name="metric" placeholder="지표 (예: 불량률)" required>
+      </div>
+      <div class="row" style="margin-top:.4rem;">
+        <input type="number" step="any" name="baseline" placeholder="기준값" required style="width:7rem">
+        <input type="number" step="any" name="observed" placeholder="관측값" required style="width:7rem">
+        <select name="direction" style="width:auto">
+          <option value="higher_better">클수록 좋음</option>
+          <option value="lower_better">작을수록 좋음</option>
+        </select>
+      </div>
+      <div class="row" style="margin-top:.4rem;">
+        <input type="number" step="any" name="min_rel_improvement" value="0.2"
+               style="width:7rem" title="최소 상대 개선폭">
+        <button type="submit">측정 기록</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <h3>🔗 백링크</h3>
+  {% if backlinks %}
+    <ul>{% for b in backlinks %}<li><a href="/wiki/{{ b.slug }}">{{ b.title }}</a></li>{% endfor %}</ul>
+  {% else %}<p class="muted">이 페이지를 링크한 문서가 아직 없습니다.</p>{% endif %}
+  {% if broken %}
+    <p class="muted">끊긴 링크(미생성): {{ broken|join(", ") }}</p>
+  {% endif %}
+</div>
+
+<details class="card">
+  <summary>✏️ 본문 편집 (편집 시 LLM 북키핑이 요약·링크 갱신)</summary>
+  <form method="post" action="/wiki/{{ page.slug }}/edit" style="margin-top:.6rem;">
+    <textarea name="body">{{ page.body }}</textarea>
+    <div style="margin-top:.5rem;"><button type="submit">저장</button></div>
+  </form>
+</details>
+
+{% endblock %}

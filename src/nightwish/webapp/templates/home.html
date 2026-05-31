@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block body %}
+
+{% if not user %}
+  <div class="card">
+    <h2>검증된 소셜 위키</h2>
+    <p class="muted">카파시/옵시디안식 위키 + 소셜 쉐어링 + <strong>인증 투자</strong>.
+      위에 이름을 넣고 시작하면 초기 포인트를 받습니다. 페이지를 쓰고, 공유하고,
+      좋은 지식에 투자하세요. <strong>외부 측정으로 인증된</strong> 페이지는,
+      먼저 알아본 투자자에게 후속 투자의 일부가 흐릅니다.</p>
+  </div>
+{% endif %}
+
+<div class="card">
+  <h3>📡 공유 피드</h3>
+  {% if feed %}
+    {% for p in feed %}
+      <div class="row" style="justify-content:space-between; border-top:1px solid var(--line); padding:.6rem 0;">
+        <div>
+          <a href="/wiki/{{ p.slug }}"><strong>{{ p.title }}</strong></a>
+          {% if p.slug in verified_set %}<span class="badge">✓ 인증됨</span>{% endif %}
+          <div class="muted">{{ p.summary or "(요약 없음)" }}</div>
+          <div class="muted">by {{ service.users[p.author_id].display_name }}
+            · 투자 {{ "%.0f"|format(service.total_invested(p.slug)) }}P</div>
+        </div>
+      </div>
+    {% endfor %}
+  {% else %}
+    <p class="muted">아직 공유된 페이지가 없습니다.</p>
+  {% endif %}
+</div>
+
+{% if user %}
+<div class="card">
+  <h3>📝 내 페이지</h3>
+  {% if mine %}
+    <ul>
+    {% for p in mine %}
+      <li><a href="/wiki/{{ p.slug }}">{{ p.title }}</a>
+        {% if p.shared %}<span class="muted">· 공유됨</span>{% endif %}
+        {% if p.slug in verified_set %}<span class="badge">✓</span>{% endif %}
+      </li>
+    {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted"><a href="/wiki/new">첫 페이지</a>를 써보세요.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+{% endblock %}

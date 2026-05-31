@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}없는 페이지{% endblock %}
+{% block body %}
+<div class="card">
+  <h2>아직 없는 페이지: <code>{{ slug }}</code></h2>
+  {% if user %}
+    <p>이 제목으로 새 페이지를 만들 수 있습니다.</p>
+    <form method="post" action="/wiki">
+      <input type="hidden" name="title" value="{{ slug }}">
+      <textarea name="body" placeholder="내용을 적어주세요..."></textarea>
+      <div style="margin-top:.6rem;"><button type="submit">이 제목으로 만들기</button>
+        <a href="/">홈으로</a></div>
+    </form>
+  {% else %}
+    <p class="muted">시작(로그인) 후 만들 수 있습니다. <a href="/">홈으로</a></p>
+  {% endif %}
+</div>
+{% endblock %}

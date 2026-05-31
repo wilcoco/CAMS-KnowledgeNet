@@ -13,13 +13,23 @@ authors = [{ name = "Json (홍정수)" }]
 keywords = ["ontology", "knowledge", "hub-authority", "tokenomics", "tacit-knowledge"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "httpx>=0.27"]
+# 서비스(MVS) 레이어에만 필요. 도메인 코어는 여전히 의존성 0.
+service = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+]
 
 [project.scripts]
 nightwish-firstwheel = "nightwish.simulation:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"nightwish.webapp" = ["templates/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

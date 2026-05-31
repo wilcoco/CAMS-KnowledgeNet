@@ -23,7 +23,8 @@
 | **프로토타입 매핑** | [`docs/prototype.md`](docs/prototype.md) | 설계 개념 → 코드 1:1 대응표 |
 | **외부 레퍼런스** | [`docs/related/`](docs/related/) | Karpathy "LLM Wiki"(2026-04) 비교 — 같은 RAG 비판, 다른 답(수렴 vs 경합 보존) |
 | **동작하는 MVP** | [`src/nightwish/`](src/nightwish/) | 온톨로지 트리 · 허브/권위 엔진 · 포인트 경제 · **검증 닻** · **거버넌스** · 질의 파이프라인 |
-| **테스트** | [`tests/`](tests/) | 47개 단위 테스트 (불변식 검증) |
+| **동작하는 서비스(MVS)** | [`src/nightwish/wiki/`](src/nightwish/wiki/) · [`webapp/`](src/nightwish/webapp/) | **검증된 소셜 위키** — 카파시/옵시디안 위키 + 소셜 쉐어링 + 인증 투자 (FastAPI). 스코프: [`docs/service-mvs.md`](docs/service-mvs.md) |
+| **테스트** | [`tests/`](tests/) | 65개 단위 테스트 (불변식 검증) |
 | **예제** | [`examples/`](examples/) | 첫 바퀴 시뮬레이션 · 배당 라우팅 · **검증 닻 첫 바퀴(P0)** |
 
 ---
@@ -63,8 +64,22 @@ python -m nightwish.simulation    # §7 "첫 바퀴" 시뮬레이션 리포트
 python examples/dividend_demo.py  # 부가가치-게이트 배당 라우팅 데모
 python examples/verified_wheel.py # [P0] 검증 닻이 배당을 여는 첫 바퀴
 
-python -m pytest -q               # 47개 테스트
+python -m pytest -q               # 65개 테스트
 ```
+
+### 서비스(MVS) 실행 — 검증된 소셜 위키
+
+> "카파시/옵시디안식 위키 + 소셜 쉐어링 + 인증 투자만" 담은 최소 동작 서비스.
+> 도메인 코어를 그대로 재사용한 위에 FastAPI 웹앱을 얹었다. (상세: [`docs/service-mvs.md`](docs/service-mvs.md))
+
+```bash
+pip install -e ".[service]"                 # 서비스 의존성 (코어는 여전히 0)
+uvicorn nightwish.webapp.app:app --reload   # http://127.0.0.1:8000
+```
+
+이름으로 시작 → 페이지 작성(`[[위키링크]]`, LLM 북키핑이 요약·링크 자동 추출)
+→ 공유(피드 노출) → 투자(스테이킹) → **외부 측정으로 인증**. 인증된 페이지에
+후속 투자가 들어오면 일부가 *먼저 알아본 투자자*에게 흐른다(인증 투자).
 
 ### 첫 바퀴 시뮬레이션 출력 (요약)
 
