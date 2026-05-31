@@ -21,6 +21,7 @@
 | **실행 로드맵** | [`docs/roadmap.md`](docs/roadmap.md) | 부트스트랩(첫 카토 온보딩) · MVP 우선순위 · 검증 닻 · 화폐공학 · 거버넌스 · 법무 |
 | **설계 비평/압박 테스트** | [`docs/critique.md`](docs/critique.md) | 화폐공학 균열 · 폰지 방어 · 거버넌스 급소 · 사상적 검토를 적대적으로 재검 |
 | **프로토타입 매핑** | [`docs/prototype.md`](docs/prototype.md) | 설계 개념 → 코드 1:1 대응표 |
+| **외부 레퍼런스** | [`docs/related/`](docs/related/) | Karpathy "LLM Wiki"(2026-04) 비교 — 같은 RAG 비판, 다른 답(수렴 vs 경합 보존) |
 | **동작하는 MVP** | [`src/nightwish/`](src/nightwish/) | 온톨로지 트리 · 허브/권위 엔진 · 포인트 경제 · **검증 닻** · **거버넌스** · 질의 파이프라인 |
 | **테스트** | [`tests/`](tests/) | 47개 단위 테스트 (불변식 검증) |
 | **예제** | [`examples/`](examples/) | 첫 바퀴 시뮬레이션 · 배당 라우팅 · **검증 닻 첫 바퀴(P0)** |
