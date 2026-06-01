@@ -196,6 +196,11 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Nightwish Wiki — shared LLM wiki", version="0.1.0",
                   lifespan=lifespan)
 
+    @app.get("/api/health")
+    def health():
+        # Railway/uptime healthcheck — must return 200 quickly.
+        return {"status": "ok"}
+
     @app.get("/api/state")
     def state():
         svc = get_service()
