@@ -51,6 +51,13 @@
   .msg.err { color:#ff7a7a; }
   small.hint { color:var(--mut); font-size:11px; }
   .badge { font-size:10px; padding:1px 6px; border-radius:10px; background:#252a35; }
+  .ptrow { display:flex; gap:6px; align-items:center; margin-top:6px; }
+  .ptrow input { flex:1; }
+  #overlay { position:fixed; inset:0; background:rgba(8,10,14,.92); display:none;
+             z-index:50; flex-direction:column; }
+  #overlay header { background:transparent; }
+  #overlay .close { margin-left:auto; }
+  #gcanvas { flex:1; width:100%; display:block; cursor:grab; }
 </style>
 </head>
 <body>
@@ -58,9 +65,11 @@
   <h1>📚 업무 지식</h1>
   <span class="stat">페이지 <b id="s-pages">0</b></span>
   <span class="stat">모드 <b id="s-mode">…</b></span>
+  <button class="sec" onclick="openGraph()">🕸 그래프</button>
   <span style="margin-left:auto"></span>
+  <span class="stat">잔액 <b id="s-bal">0</b></span>
   <span class="stat">나:</span>
-  <input id="who" value="Json" style="width:130px" placeholder="내 이름" />
+  <input id="who" value="Json" style="width:130px" placeholder="내 이름" onchange="refresh()" />
 </header>
 
 <div class="grid">
@@ -85,6 +94,7 @@
         <button id="btn-edit" onclick="edit()">편집</button>
         <button id="btn-save" class="sec" style="display:none" onclick="save()">저장</button>
         <button class="sec" onclick="aiDraft()">✨ AI 초안</button>
+        <button class="sec" onclick="endorsePage()">👍 추천(스테이킹)</button>
         <span class="msg" id="msg"></span>
       </div>
       <div id="view" class="view"></div>
@@ -92,8 +102,17 @@
     </div>
   </section>
 
-  <!-- RIGHT: backlinks + rankings -->
+  <!-- RIGHT: points + backlinks + rankings -->
   <aside class="right">
+    <h2 class="sec">💰 내 포인트</h2>
+    <small class="hint">발행(UBI)으로 받은 포인트를 좋은 문서에 스테이킹하면, 그 문서의
+      작성자·선행 추천자에게 배당이 흐릅니다.</small>
+    <div class="ptrow">
+      <input id="mint-amt" type="number" value="1000" />
+      <button class="sec" onclick="mint()">발행</button>
+    </div>
+    <div id="pt-msg" class="msg"></div>
+
     <h2 class="sec">백링크 (이 문서를 가리킴)</h2>
     <div id="backlinks" class="bl"><small class="hint">없음</small></div>
     <h2 class="sec">🏆 인기 문서 (권위)</h2>
@@ -102,6 +121,16 @@
     <small class="hint">먼저 좋은 문서를 알아보고 링크한 사람</small>
     <div id="topusers" class="rank"></div>
   </aside>
+</div>
+
+<div id="overlay">
+  <header>
+    <h1>🕸 지식 연결망</h1>
+    <span class="stat">노드 크기 = 권위 · 화살표 = [[링크]]</span>
+    <button class="sec close" onclick="closeGraph()">닫기 ✕</button>
+    <button class="sec" onclick="layoutGraph()">재배치</button>
+  </header>
+  <canvas id="gcanvas"></canvas>
 </div>
 
 <script>
@@ -143,8 +172,9 @@ function render(md){
   return html;
 }
 
-async function refresh(){ await Promise.all([loadList(), loadScores(), loadState()]); }
+async function refresh(){ await Promise.all([loadList(), loadScores(), loadState(), loadBalance()]); }
 async function loadState(){ const s=await api('/state'); $('s-pages').textContent=s.page_count; $('s-mode').textContent=s.hub_mode; }
+async function loadBalance(){ try{ const l=await api('/ledger'); $('s-bal').textContent=Math.round((l.available[who()]||0)*100)/100; }catch(e){} }
 async function loadList(){
   const q=$('search').value.trim();
   const ps=await api('/search?q='+encodeURIComponent(q));
@@ -214,6 +244,71 @@ async function save(){
     msg('저장됨 ✓');
   }catch(e){ msg(e.message,true); }
 }
+function msgEl(el, t, e=false){ el.textContent=t; el.className='msg'+(e?' err':''); }
+async function mint(){
+  try{ const r=await api('/mint','POST',{account:who(), amount:parseFloat($('mint-amt').value)||0});
+    msgEl($('pt-msg'), `${who()} 잔액 ${Math.round(r.balance*100)/100}`); await refresh();
+  }catch(e){ msgEl($('pt-msg'), e.message, true); }
+}
+async function endorsePage(){
+  if(!current){ msg('문서를 먼저 선택', true); return; }
+  const amt = parseFloat(prompt('이 문서에 스테이킹할 포인트:', '50')||'0');
+  if(!amt || amt<=0) return;
+  try{
+    const r=await api('/endorse','POST',{account:who(), slug:current, amount:amt});
+    const paid = Object.entries(r.payouts).map(([k,v])=>`${k}:${Math.round(v*100)/100}`).join(', ')||'(없음)';
+    msg(`추천 완료 · 배당 → ${paid} · 내 잔액 ${Math.round(r.balance*100)/100}`); await refresh();
+  }catch(e){ msg(e.message, true); }
+}
+
+// ---- graph (tiny force-directed layout on canvas) ----
+let G=null, gcanvas=null, gctx=null;
+async function openGraph(){
+  $('overlay').style.display='flex';
+  G = await api('/graph');
+  gcanvas = $('gcanvas'); gctx = gcanvas.getContext('2d');
+  layoutGraph();
+  gcanvas.onclick = (ev)=>{
+    if(!G) return;
+    const r=gcanvas.getBoundingClientRect(), mx=ev.clientX-r.left, my=ev.clientY-r.top;
+    let hit=null, best=400;
+    for(const n of G.nodes){ const d=(n.x-mx)**2+(n.y-my)**2; if(d<best){best=d;hit=n;} }
+    if(hit){ closeGraph(); open(hit.slug); }
+  };
+}
+function closeGraph(){ $('overlay').style.display='none'; }
+function layoutGraph(){
+  if(!G) return;
+  const W=gcanvas.width=gcanvas.clientWidth, H=gcanvas.height=gcanvas.clientHeight;
+  const idx={}; G.nodes.forEach((n,i)=>{ idx[n.slug]=i;
+    n.x=W/2+Math.cos(i)*120+(Math.random()-.5)*40; n.y=H/2+Math.sin(i)*120+(Math.random()-.5)*40; n.vx=0; n.vy=0; });
+  const E=G.edges.filter(e=>idx[e.source]!=null&&idx[e.target]!=null);
+  for(let step=0; step<240; step++){
+    for(let i=0;i<G.nodes.length;i++){ const a=G.nodes[i];
+      a.vx+=(W/2-a.x)*0.002; a.vy+=(H/2-a.y)*0.002;
+      for(let j=i+1;j<G.nodes.length;j++){ const b=G.nodes[j];
+        let dx=a.x-b.x, dy=a.y-b.y, d2=dx*dx+dy*dy+0.01, f=1400/d2, d=Math.sqrt(d2);
+        dx/=d; dy/=d; a.vx+=dx*f; a.vy+=dy*f; b.vx-=dx*f; b.vy-=dy*f; }
+    }
+    for(const e of E){ const a=G.nodes[idx[e.source]], b=G.nodes[idx[e.target]];
+      let dx=b.x-a.x, dy=b.y-a.y, d=Math.sqrt(dx*dx+dy*dy)||1, f=(d-90)*0.01;
+      dx/=d; dy/=d; a.vx+=dx*f; a.vy+=dy*f; b.vx-=dx*f; b.vy-=dy*f; }
+    for(const n of G.nodes){ n.x+=(n.vx*=0.85); n.y+=(n.vy*=0.85);
+      n.x=Math.max(20,Math.min(W-20,n.x)); n.y=Math.max(20,Math.min(H-20,n.y)); }
+  }
+  drawGraph(idx, E);
+}
+function drawGraph(idx, E){
+  gctx.clearRect(0,0,gcanvas.width,gcanvas.height);
+  gctx.strokeStyle='#3a4252'; gctx.lineWidth=1;
+  for(const e of E){ const a=G.nodes[idx[e.source]], b=G.nodes[idx[e.target]];
+    gctx.beginPath(); gctx.moveTo(a.x,a.y); gctx.lineTo(b.x,b.y); gctx.stroke(); }
+  for(const n of G.nodes){ const r=4+Math.min(16,(n.authority||0));
+    gctx.beginPath(); gctx.arc(n.x,n.y,r,0,7); gctx.fillStyle=n.is_stub?'#c98a8a':'#7aa2ff'; gctx.fill();
+    gctx.fillStyle='#cfd6e4'; gctx.font='11px system-ui';
+    gctx.fillText((n.title||'').slice(0,16), n.x+r+3, n.y+4); }
+}
+
 async function aiDraft(){
   const title = current ? $('p-title').textContent : ($('p-title').dataset.newtitle||$('p-title').textContent);
   const prompt_ = prompt('AI에게 요청 (무엇을 적을까요?):','')||'';

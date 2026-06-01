@@ -25,7 +25,7 @@
 | **동작하는 MVP** | [`src/nightwish/`](src/nightwish/) | 온톨로지 트리 · 허브/권위 엔진 · 포인트 경제 · **검증 닻** · **거버넌스** · 질의 파이프라인 |
 | **HTTP 서비스 + 웹 UI** | [`src/nightwish/service.py`](src/nightwish/service.py) · [`static/`](src/nightwish/static/) | FastAPI 백엔드(질문/포크/기여/스테이킹/배당/검증) + 트리를 보고 조작하는 웹 화면. JSON 스냅샷 영속화([`store.py`](src/nightwish/store.py)) |
 | **기반 특허 분석** | [`docs/patents/`](docs/patents/) | 등록공보 원문 + 1차 출처 대조 분석(서지·청구항·법적상태) |
-| **테스트** | [`tests/`](tests/) | 56개 단위 테스트 (불변식 · 특허 청구항 수치 · 서비스 E2E) |
+| **테스트** | [`tests/`](tests/) | 77개 단위 테스트 (불변식 · 특허 청구항 수치 · 서비스 E2E) |
 | **예제** | [`examples/`](examples/) | 첫 바퀴 시뮬레이션 · 배당 라우팅 · **검증 닻 첫 바퀴(P0)** |
 
 ---
@@ -67,7 +67,7 @@ python examples/dividend_demo.py  # 부가가치-게이트 배당 라우팅 데�
 python examples/verified_wheel.py # [P0] 검증 닻이 배당을 여는 첫 바퀴
 
 pip install -e ".[dev]"           # + pytest, httpx
-python -m pytest -q               # 68개 테스트
+python -m pytest -q               # 77개 테스트
 ```
 
 ### ⭐ MVP — 공유 LLM 위키 (Obsidian + LLM, 사용자 간 공유)
@@ -82,9 +82,12 @@ nightwish-mvp                     # 또는: uvicorn nightwish.mvp:app
 # → http://127.0.0.1:8000/  에서 페이지 작성·[[링크]]·AI 초안·인기문서/안목기여자 랭킹
 ```
 
-- 상태는 `$NIGHTWISH_WIKI_DB`(기본 `data/wiki.json`) 스냅샷에 영속화.
-- LLM 초안은 교체 가능: 기본 오프라인 스텁, 실모델은 `nightwish.mvp.set_ai(fn)` 주입.
-- 엔드포인트: `GET/POST /api/pages`, `/api/search`, `/api/draft`, `/api/scores`, `/api/resolve/{title}`.
+- 상태(위키 + 포인트 경제)는 `$NIGHTWISH_WIKI_DB`(기본 `data/wiki.json`) 단일 스냅샷에 영속화.
+- **그래프 뷰**: 상단 🕸 버튼 → 페이지 연결망 시각화(노드 크기=권위, 클릭 시 이동). API: `GET /api/graph`.
+- **포인트 경제**: 발행(UBI) → 좋은 문서에 **추천(스테이킹)** → 작성자·선행 추천자에게 **배당**(시간가중) + 소각. API: `POST /api/mint` · `POST /api/endorse` · `GET /api/ledger`.
+- **실제 LLM 초안(선택)**: 기본은 오프라인 스텁. `pip install -e ".[llm]"` 후 환경변수
+  `NIGHTWISH_ENABLE_LLM=1` + `ANTHROPIC_API_KEY=…` 를 주면 Claude(기본 `claude-opus-4-8`)로 초안 생성. 코드로는 `nightwish.mvp.set_ai(fn)`.
+- 엔드포인트: `GET/POST /api/pages`, `/api/search`, `/api/draft`, `/api/scores`, `/api/graph`, `/api/{mint,endorse,ledger}`, `/api/resolve/{title}`.
 
 **Railway 배포:** 이 저장소를 Railway에 연결하면 [`nixpacks.toml`](nixpacks.toml)/[`Procfile`](Procfile)
 이 `0.0.0.0:$PORT`로 `nightwish.mvp:app`을 띄운다. **브랜치별로 서비스를 따로 두면** 각

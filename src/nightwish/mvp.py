@@ -20,7 +20,9 @@ Railway Volume there to survive redeploys.
 
 from __future__ import annotations
 
+import json
 import os
+import tempfile
 import threading
 from pathlib import Path
 from typing import Callable, Optional
@@ -32,6 +34,7 @@ from pydantic import BaseModel, Field
 
 from nightwish.scoring import ScoreEngine
 from nightwish.wiki import Wiki, slugify
+from nightwish.wiki_economy import InsufficientPoints, WikiEconomy
 
 STATIC_DIR = Path(__file__).parent / "static"
 DEFAULT_DB = os.environ.get("NIGHTWISH_WIKI_DB", "data/wiki.json")
@@ -67,18 +70,56 @@ def set_ai(fn: Callable[[str, str], str]) -> None:
     _ai_fn = fn
 
 
+def configure_ai() -> bool:
+    """Activate the Claude-backed draft fn if enabled+available. Returns success."""
+    from nightwish.llm import make_draft_fn
+
+    fn = make_draft_fn()
+    if fn is not None:
+        set_ai(fn)
+        return True
+    return False
+
+
 # --------------------------------------------------------------------------- #
 # state + persistence                                                         #
 # --------------------------------------------------------------------------- #
+def _load_state(db_path: str, hub_mode: str) -> tuple[Wiki, WikiEconomy]:
+    """Load the combined {wiki, economy} snapshot (or legacy wiki-only, or fresh)."""
+    if os.path.exists(db_path):
+        with open(db_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if "wiki" in data:  # combined format (schema 2)
+            return Wiki.from_json(data["wiki"]), WikiEconomy.from_json(
+                data.get("economy", {})
+            )
+        if "pages" in data:  # legacy wiki-only snapshot
+            return Wiki.from_json(data), WikiEconomy()
+    return Wiki(scoring=ScoreEngine(mode=hub_mode)), WikiEconomy()
+
+
+def _save_state(db_path: str, wiki: Wiki, econ: WikiEconomy) -> None:
+    directory = os.path.dirname(os.path.abspath(db_path))
+    os.makedirs(directory, exist_ok=True)
+    payload = {"schema": 2, "wiki": wiki.to_json(), "economy": econ.to_json()}
+    fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, db_path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
 class WikiService:
     def __init__(self, db_path: str = DEFAULT_DB, *, hub_mode: str = HUB_MODE):
         self.db_path = db_path
         self._lock = threading.RLock()
-        loaded = Wiki.load(db_path)
-        self.wiki: Wiki = loaded or Wiki(scoring=ScoreEngine(mode=hub_mode))
+        self.wiki, self.econ = _load_state(db_path, hub_mode)
 
     def save(self) -> None:
-        self.wiki.save(self.db_path)
+        _save_state(self.db_path, self.wiki, self.econ)
 
 
 _service: Optional[WikiService] = None
@@ -112,6 +153,17 @@ class DraftBody(BaseModel):
     prompt: str = ""
 
 
+class MintBody(BaseModel):
+    account: str = Field(min_length=1)
+    amount: float = Field(gt=0)
+
+
+class EndorseBody(BaseModel):
+    account: str = Field(min_length=1)
+    slug: str = Field(min_length=1)
+    amount: float = Field(gt=0)
+
+
 def _page_view(svc: WikiService, slug: str, *, full: bool = False) -> dict:
     p = svc.wiki.get(slug)
     view = {
@@ -134,7 +186,15 @@ def _page_view(svc: WikiService, slug: str, *, full: bool = False) -> dict:
 # app                                                                         #
 # --------------------------------------------------------------------------- #
 def create_app() -> FastAPI:
-    app = FastAPI(title="Nightwish Wiki — shared LLM wiki", version="0.1.0")
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        configure_ai()  # no-op unless NIGHTWISH_ENABLE_LLM + ANTHROPIC_API_KEY set
+        yield
+
+    app = FastAPI(title="Nightwish Wiki — shared LLM wiki", version="0.1.0",
+                  lifespan=lifespan)
 
     @app.get("/api/state")
     def state():
@@ -181,7 +241,12 @@ def create_app() -> FastAPI:
     @app.post("/api/draft")
     def draft(body: DraftBody):
         # AI assist does not save — returns suggested markdown to edit.
-        return {"title": body.title, "body": _ai_fn(body.title, body.prompt)}
+        # Fall back to the offline stub if the real backend errors (network/key).
+        try:
+            text = _ai_fn(body.title, body.prompt)
+        except Exception:
+            text = offline_draft(body.title, body.prompt)
+        return {"title": body.title, "body": text}
 
     @app.get("/api/scores")
     def scores():
@@ -209,6 +274,73 @@ def create_app() -> FastAPI:
             p = svc.wiki.get(slug)
             return {"title": title, "slug": slug,
                     "exists": p is not None and not p.is_stub}
+
+    @app.get("/api/graph")
+    def graph():
+        svc = get_service()
+        with svc._lock:
+            w = svc.wiki
+            nodes = [
+                {
+                    "slug": p.slug, "title": p.title,
+                    "authority": round(w.authority_of(p.slug), 3),
+                    "is_stub": p.is_stub,
+                }
+                for p in w.pages.values()
+            ]
+            edges = [
+                {"source": p.slug, "target": t}
+                for p in w.pages.values()
+                for t in p.links
+                if t in w.pages
+            ]
+            return {"nodes": nodes, "edges": edges}
+
+    @app.post("/api/mint")
+    def mint(body: MintBody):
+        svc = get_service()
+        with svc._lock:
+            svc.econ.mint(body.account, body.amount)
+            svc.save()
+            return {"account": body.account, "balance": svc.econ.balance(body.account)}
+
+    @app.post("/api/endorse")
+    def endorse(body: EndorseBody):
+        svc = get_service()
+        with svc._lock:
+            page = svc.wiki.get(body.slug)
+            if page is None or page.is_stub:
+                raise HTTPException(404, f"page {body.slug!r} not found or empty")
+            try:
+                payouts = svc.econ.endorse(
+                    body.account, body.slug, body.amount,
+                    page_author=page.author, hub_of=svc.wiki.hub_of,
+                )
+            except (InsufficientPoints, ValueError) as e:
+                raise HTTPException(400, str(e))
+            svc.save()
+            return {
+                "account": body.account,
+                "balance": round(svc.econ.balance(body.account), 4),
+                "payouts": {k: round(v, 4) for k, v in payouts.items()},
+                "staked_on_page": round(
+                    sum(svc.econ.staked_on(body.slug).values()), 4
+                ),
+            }
+
+    @app.get("/api/ledger")
+    def ledger():
+        svc = get_service()
+        with svc._lock:
+            e = svc.econ
+            return {
+                "available": {k: round(v, 4) for k, v in e.available.items() if v},
+                "staked_by_page": {
+                    k: {a: round(s, 4) for a, s in v.items()}
+                    for k, v in e.staked.items() if v
+                },
+                "burned": round(e.burned, 4),
+            }
 
     @app.get("/")
     def index():

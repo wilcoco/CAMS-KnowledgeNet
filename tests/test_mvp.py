@@ -58,8 +58,41 @@ def test_resolve_wikilink(client):
 def test_persistence_reload(client):
     client.post("/api/pages", json={"title": "A", "body": "[[T]]", "author": "u1"})
     client.post("/api/pages", json={"title": "B", "body": "[[T]]", "author": "u2"})
-    from nightwish.wiki import Wiki, slugify
-    reloaded = Wiki.load(client.db)
-    assert reloaded is not None
-    assert reloaded.hub_of("u1") > 0
-    assert reloaded.get_by_title("A") is not None
+    client.post("/api/mint", json={"account": "u1", "amount": 100})
+    # a fresh service over the same combined snapshot restores wiki + economy
+    reloaded = mvp.WikiService(client.db)
+    assert reloaded.wiki.hub_of("u1") > 0
+    assert reloaded.wiki.get_by_title("A") is not None
+    assert reloaded.econ.balance("u1") == 100.0
+
+
+def test_mint_endorse_dividend(client):
+    # author writes a page; a backer mints and endorses it
+    client.post("/api/pages", json={"title": "노하우", "body": "내용", "author": "author"})
+    client.post("/api/mint", json={"account": "backer", "amount": 200})
+    r = client.post("/api/endorse",
+                    json={"account": "backer", "slug": "노하우", "amount": 100}).json()
+    # the page author receives a dividend; the backer's balance dropped
+    assert r["payouts"].get("author", 0) > 0
+    assert r["balance"] == 100.0  # 200 minted - 100 staked
+    led = client.get("/api/ledger").json()
+    assert led["burned"] > 0 and led["available"]["author"] > 0
+
+
+def test_endorse_requires_balance_and_real_page(client):
+    client.post("/api/pages", json={"title": "P", "body": "x", "author": "a"})
+    # no balance -> 400
+    assert client.post("/api/endorse",
+                       json={"account": "broke", "slug": "p", "amount": 10}).status_code == 400
+    # endorsing a non-existent / stub page -> 404
+    client.post("/api/mint", json={"account": "a", "amount": 50})
+    assert client.post("/api/endorse",
+                       json={"account": "a", "slug": "ghost", "amount": 5}).status_code == 404
+
+
+def test_graph_endpoint(client):
+    client.post("/api/pages", json={"title": "A", "body": "[[B]] 참고", "author": "u"})
+    g = client.get("/api/graph").json()
+    slugs = {n["slug"] for n in g["nodes"]}
+    assert {"a", "b"} <= slugs
+    assert any(e["source"] == "a" and e["target"] == "b" for e in g["edges"])
