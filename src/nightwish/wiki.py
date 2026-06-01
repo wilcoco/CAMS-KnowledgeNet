@@ -61,21 +61,6 @@ def extract_links(body: str) -> list[str]:
     return list(seen)
 
 
-_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
-
-
-def _tokens(text: str) -> set[str]:
-    return set(_TOKEN_RE.findall(text.lower()))
-
-
-def _ngrams(text: str, n: int = 2) -> set[str]:
-    """Character n-grams (whitespace stripped) — order-free, CJK-friendly."""
-    s = re.sub(r"\s+", "", text.lower())
-    if len(s) < n:
-        return {s} if s else set()
-    return {s[i : i + n] for i in range(len(s) - n + 1)}
-
-
 @dataclass
 class Page:
     slug: str
@@ -288,31 +273,37 @@ class Wiki:
             key=lambda p: -p.updated_at,
         )
 
-    def search(self, query: str, space: str | None = None, limit: int = 50) -> list[Page]:
-        """Ranked lexical search (token overlap + char n-gram + phrase boost).
+    def _haystack(self, p: "Page") -> tuple[str, str]:
+        """(title, full text) lowercased — full text includes the contribution
+        thread so follow-up answers/comments are searchable too."""
+        body = " ".join([p.body] + [c.get("body", "") for c in p.contributions])
+        return p.title.lower(), body.lower()
 
-        Order-free and CJK-friendly — "무도장 하이그로시" matches a page titled
-        "사출 하이그로시 무도장" even though that exact phrase never appears.
-        Filtered to the viewer's layer (public ∪ ``space``).
+    def search(self, query: str, space: str | None = None, limit: int = 50) -> list[Page]:
+        """Forgiving keyword search: per-token substring frequency + phrase boost.
+
+        - **Substring per token** → CJK-morphology tolerant ("불량" matches "불량률",
+          "사출" matches "사출은") and order-free.
+        - Searches **title + body + contribution thread**.
+        - Exact-phrase match gets an extra boost. Filtered to the viewer's layer.
+        Synonyms/paraphrase ("유광"≈"하이그로시") still need vector search — roadmap.
         """
         q = query.strip()
         if not q:
             return self.list_pages(space)
         ql = q.lower()
-        q_tok, q_ng = _tokens(q), _ngrams(q)
+        qtokens = [t for t in re.split(r"\s+", ql) if t]
         scored: list[tuple[float, Page]] = []
         for p in self.pages.values():
             if not self._visible(p, space):
                 continue
-            t_tok, b_tok = _tokens(p.title), _tokens(p.body)
-            t_ng, b_ng = _ngrams(p.title), _ngrams(p.body)
-            score = 3.0 * len(q_tok & t_tok) + 1.0 * len(q_tok & b_tok)
-            if q_ng:
-                score += 2.0 * len(q_ng & t_ng) / len(q_ng)
-                score += 1.0 * len(q_ng & b_ng) / len(q_ng)
-            if ql in p.title.lower():
+            title, text = self._haystack(p)
+            score = 0.0
+            for t in qtokens:
+                score += 3.0 * title.count(t) + 1.0 * text.count(t)
+            if ql in title:
                 score += 5.0
-            elif ql in p.body.lower():
+            elif ql in text:
                 score += 2.0
             if score > 0:
                 scored.append((score, p))

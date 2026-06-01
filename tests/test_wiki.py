@@ -61,6 +61,17 @@ def test_top_pages_excludes_stubs():
     assert all(p.slug != slugify("T") for p, _ in w.top_pages())
 
 
+def test_search_is_forgiving_and_covers_thread():
+    w = Wiki()
+    p = w.save_page("사출 공정", "웰드라인 불량률을 낮추는 법", "a")
+    w.add_contribution(p.slug, "answer", "AI", "게이트를 0.1mm 미세조정한다")
+    w.save_page("게이트 설계", "사출 압력 조정", "a")
+    titles = lambda q: [x.title for x in w.search(q)]
+    assert "사출 공정" in titles("불량")        # 불량 ⊂ 불량률 (substring-forgiving)
+    assert "사출 공정" in titles("미세조정")     # contribution thread is searchable
+    assert set(titles("사출")) == {"사출 공정", "게이트 설계"}  # both contain 사출
+
+
 def test_persistence_round_trip(tmp_path):
     path = str(tmp_path / "wiki.json")
     w = Wiki()
