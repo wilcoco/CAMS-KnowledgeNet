@@ -195,18 +195,27 @@ async function loadState(){ const s=await api('/state'); $('s-pages').textConten
 async function loadBalance(){ try{ const l=await api('/ledger'); $('s-bal').textContent=Math.round((l.available[who()]||0)*100)/100; }catch(e){} }
 async function loadList(){
   const q=$('search').value.trim();
-  const ps=await api('/search?q='+encodeURIComponent(q));
+  const all=await api('/search?q='+encodeURIComponent(q));
+  const ps=all.filter(p=>!p.is_stub);   // 빈 스텁(참조만 된 미작성 항목)은 목록에서 숨김
   const box=$('list'); box.innerHTML='';
+  if(!ps.length && q) box.innerHTML='<small class="hint">검증된 문서 없음</small>';
   ps.forEach(p=>{
     const d=document.createElement('div');
-    d.className='pitem'+(p.is_stub?' stub':'');
+    d.className='pitem';
     d.onclick=()=>open(p.slug);
-    const tag = p.kind==='query' ? `<span class="badge">질의${p.status==='resolved'?'✓':''}</span>`
-              : (p.is_stub?'<span class="badge">stub</span>':'');
+    const tag = p.kind==='query' ? `<span class="badge">질의${p.status==='resolved'?'✓':''}</span>` : '';
     d.innerHTML=`${esc(p.title)} ${tag}
       <div class="a">by ${esc(p.author)} · 권위 ${p.authority}</div>`;
     box.appendChild(d);
   });
+  // 지식 공백(참조됐으나 빈 문서)은 따로, 작게
+  const stubs=all.filter(p=>p.is_stub);
+  if(stubs.length){
+    const g=document.createElement('div'); g.style.cssText='margin-top:8px';
+    g.innerHTML='<small class="hint">✍️ 채워야 할 항목('+stubs.length+'): </small>'
+      + stubs.slice(0,8).map(s=>`<button class="link" style="margin-right:8px" onclick="newPage('${esc(s.title)}')">${esc(s.title)}</button>`).join('');
+    box.appendChild(g);
+  }
   // 질문 흐름: 검색어가 있으면 AI 답변 / 공개 질의로 이어갈 수 있게
   const act=$('ask-actions');
   if(!q){ act.innerHTML=''; }
