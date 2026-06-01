@@ -35,10 +35,14 @@ STUB_AUTHOR = "(stub)"
 
 
 def slugify(title: str) -> str:
-    """A stable id from a page title (Hangul preserved; spaces/slashes folded)."""
+    """A stable, URL-safe id from a page title (Hangul preserved).
+
+    Strips characters that would break a path segment or query string (``?``,
+    ``#``, ``/``, ``%``, ``&``, ``+`` …) and folds whitespace to hyphens.
+    """
     s = title.strip().lower()
-    s = s.replace("/", "-").replace("\\", "-")
-    s = re.sub(r"\s+", "-", s)
+    s = re.sub(r"[\\/?#%&+]+", " ", s)  # URL-breaking chars → space
+    s = re.sub(r"\s+", "-", s).strip("-")
     return s
 
 
@@ -63,11 +67,19 @@ class Page:
     last_editor: str = ""
     #: slugs this page links to (derived from its body's wikilinks)
     links: list[str] = field(default_factory=list)
+    #: "page" = knowledge/answer node; "query" = an open public question (질의)
+    kind: str = "page"
+    #: for a query: "open" (awaiting answers) or "resolved"
+    status: str = "open"
 
     @property
     def is_stub(self) -> bool:
         """A placeholder created by an incoming link but not yet written."""
         return self.author == STUB_AUTHOR and not self.body.strip()
+
+    @property
+    def is_query(self) -> bool:
+        return self.kind == "query"
 
 
 @dataclass
@@ -83,7 +95,7 @@ class Wiki:
         return self._clock
 
     # -- write ----------------------------------------------------------------
-    def save_page(self, title: str, body: str, author: str) -> Page:
+    def save_page(self, title: str, body: str, author: str, *, kind: str = "page") -> Page:
         """Create or edit a page. Wikilinks drive hub/authority scoring.
 
         A link to a not-yet-existing page auto-creates a **stub** (like Obsidian),
@@ -118,7 +130,7 @@ class Wiki:
             page = Page(
                 slug=slug, title=title, body=body, author=author,
                 created_at=created, updated_at=now, last_editor=author,
-                links=target_slugs,
+                links=target_slugs, kind=kind,
             )
         else:
             page = existing
@@ -127,6 +139,9 @@ class Wiki:
             page.updated_at = now
             page.last_editor = author
             page.links = target_slugs
+            # editing keeps the existing kind; an explicit non-default upgrades it
+            if kind != "page":
+                page.kind = kind
         self.pages[slug] = page
 
         # score the newly-added endorsements, in body order
@@ -134,6 +149,39 @@ class Wiki:
             self.scoring.link(author, ts, weight=1.0)
 
         return page
+
+    # -- public queries (사람에게 묻기) --------------------------------------
+    def create_query(self, title: str, detail: str, author: str) -> Page:
+        """Post an **open public query** — a question search/AI couldn't satisfy.
+
+        It is a first-class node: searchable, structurable, and answerable by
+        others. This is design §6 stage ③ (route to humans).
+        """
+        page = self.save_page(title, detail, author, kind="query")
+        page.status = "open"
+        return page
+
+    def answer_query(
+        self, query_slug: str, title: str, body: str, author: str
+    ) -> Page:
+        """Answer an open query: create a knowledge page linked to the query,
+        then mark the query resolved. The answer becomes searchable content."""
+        query = self.pages.get(query_slug)
+        if query is None or not query.is_query:
+            raise ValueError(f"{query_slug!r} is not a query")
+        # ensure the answer links back to the query (structuring)
+        link = f"[[{query.title}]]"
+        if link not in body:
+            body = f"{body}\n\n관련 질의: {link}"
+        answer_title = title.strip() or f"{query.title} — 답변"
+        page = self.save_page(answer_title, body, author)
+        query.status = "resolved"
+        return page
+
+    def open_queries(self) -> list[Page]:
+        return [
+            p for p in self.list_pages() if p.is_query and p.status == "open"
+        ]
 
     # -- read -----------------------------------------------------------------
     def get(self, slug: str) -> Page | None:
@@ -194,7 +242,7 @@ class Wiki:
                     "slug": p.slug, "title": p.title, "body": p.body,
                     "author": p.author, "created_at": p.created_at,
                     "updated_at": p.updated_at, "last_editor": p.last_editor,
-                    "links": list(p.links),
+                    "links": list(p.links), "kind": p.kind, "status": p.status,
                 }
                 for p in self.pages.values()
             ],
@@ -217,6 +265,7 @@ class Wiki:
                 author=d["author"], created_at=d["created_at"],
                 updated_at=d["updated_at"], last_editor=d.get("last_editor", ""),
                 links=list(d.get("links", [])),
+                kind=d.get("kind", "page"), status=d.get("status", "open"),
             )
         return wiki
 

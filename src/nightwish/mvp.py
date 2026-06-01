@@ -164,13 +164,30 @@ class EndorseBody(BaseModel):
     amount: float = Field(gt=0)
 
 
+class AiAnswerBody(BaseModel):
+    question: str = Field(min_length=1)
+    author: str = Field(min_length=1)
+
+
+class QueryBody(BaseModel):
+    title: str = Field(min_length=1)
+    detail: str = ""
+    author: str = Field(min_length=1)
+
+
+class AnswerBody(BaseModel):
+    body: str = Field(min_length=1)
+    author: str = Field(min_length=1)
+    title: str = ""
+
+
 def _page_view(svc: WikiService, slug: str, *, full: bool = False) -> dict:
     p = svc.wiki.get(slug)
     view = {
         "slug": p.slug, "title": p.title, "author": p.author,
         "last_editor": p.last_editor, "updated_at": p.updated_at,
         "is_stub": p.is_stub, "authority": round(svc.wiki.authority_of(p.slug), 4),
-        "links": list(p.links),
+        "links": list(p.links), "kind": p.kind, "status": p.status,
     }
     if full:
         view["body"] = p.body
@@ -252,6 +269,51 @@ def create_app() -> FastAPI:
         except Exception:
             text = offline_draft(body.title, body.prompt)
         return {"title": body.title, "body": text}
+
+    # -- the cycle: search → AI answer → public query → answer --------------- #
+    @app.post("/api/ai-answer")
+    def ai_answer(body: AiAnswerBody):
+        """Stage ②: search came up short → AI answers → a knowledge page is born."""
+        svc = get_service()
+        with svc._lock:
+            try:
+                text = _ai_fn(body.question, "")
+            except Exception:
+                text = offline_draft(body.question, "")
+            page = svc.wiki.save_page(body.question, text, body.author)
+            svc.save()
+            return _page_view(svc, page.slug, full=True)
+
+    @app.get("/api/queries")
+    def list_queries():
+        """Open public queries awaiting human answers (stage ③ backlog)."""
+        svc = get_service()
+        with svc._lock:
+            return [_page_view(svc, q.slug) for q in svc.wiki.open_queries()]
+
+    @app.post("/api/queries")
+    def create_query(body: QueryBody):
+        """Stage ③: post a public query — what search/AI couldn't satisfy."""
+        svc = get_service()
+        with svc._lock:
+            try:
+                q = svc.wiki.create_query(body.title, body.detail, body.author)
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+            svc.save()
+            return _page_view(svc, q.slug, full=True)
+
+    @app.post("/api/queries/{slug}/answer")
+    def answer_query(slug: str, body: AnswerBody):
+        """Answer an open query → new knowledge page (linked + searchable)."""
+        svc = get_service()
+        with svc._lock:
+            try:
+                page = svc.wiki.answer_query(slug, body.title, body.body, body.author)
+            except ValueError as e:
+                raise HTTPException(404, str(e))
+            svc.save()
+            return _page_view(svc, page.slug, full=True)
 
     @app.get("/api/scores")
     def scores():

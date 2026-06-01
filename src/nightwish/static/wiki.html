@@ -75,10 +75,16 @@
 <div class="grid">
   <!-- LEFT: search + list -->
   <aside>
-    <input id="search" placeholder="🔍 검색" style="width:100%" oninput="loadList()" />
-    <button style="width:100%;margin-top:8px" onclick="newPage()">+ 새 페이지</button>
-    <h2 class="sec">페이지</h2>
+    <h2 class="sec">질문하기</h2>
+    <input id="search" placeholder="무엇이 궁금하세요? (질문/검색)" style="width:100%"
+           oninput="loadList()" onkeydown="if(event.key==='Enter')onAsk()" />
+    <div id="ask-actions"></div>
+    <h2 class="sec">결과 / 문서</h2>
     <div id="list"></div>
+    <h2 class="sec">🙋 열린 질의</h2>
+    <small class="hint">사람의 답을 기다리는 공개 질문</small>
+    <div id="queries"></div>
+    <button class="sec" style="width:100%;margin-top:10px" onclick="newPage()">✍️ 직접 작성</button>
   </aside>
 
   <!-- CENTER: page view / editor -->
@@ -154,7 +160,7 @@ function msg(t,e=false){$('msg').textContent=t;$('msg').className='msg'+(e?' err
 function render(md){
   const lines = md.split('\n'); let html=''; let inList=false;
   const wl = s => s.replace(/\[\[([^\[\]]+)\]\]/g, (m,t)=>{
-    const slug = t.trim().toLowerCase().replace(/[\/\\]/g,'-').replace(/\s+/g,'-');
+    const slug = t.trim().toLowerCase().replace(/[\\\/?#%&+]+/g,' ').replace(/\s+/g,'-').replace(/^-+|-+$/g,'');
     return `<a class="wl" data-slug="${esc(slug)}" data-title="${esc(t.trim())}" onclick="openByLink(this)">${esc(t.trim())}</a>`;
   });
   const inline = s => wl(esc(s)).replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
@@ -172,7 +178,7 @@ function render(md){
   return html;
 }
 
-async function refresh(){ await Promise.all([loadList(), loadScores(), loadState(), loadBalance()]); }
+async function refresh(){ await Promise.all([loadList(), loadScores(), loadState(), loadBalance(), loadQueries()]); }
 async function loadState(){ const s=await api('/state'); $('s-pages').textContent=s.page_count; $('s-mode').textContent=s.hub_mode; }
 async function loadBalance(){ try{ const l=await api('/ledger'); $('s-bal').textContent=Math.round((l.available[who()]||0)*100)/100; }catch(e){} }
 async function loadList(){
@@ -183,10 +189,50 @@ async function loadList(){
     const d=document.createElement('div');
     d.className='pitem'+(p.is_stub?' stub':'');
     d.onclick=()=>open(p.slug);
-    d.innerHTML=`${esc(p.title)} ${p.is_stub?'<span class="badge">stub</span>':''}
+    const tag = p.kind==='query' ? `<span class="badge">질의${p.status==='resolved'?'✓':''}</span>`
+              : (p.is_stub?'<span class="badge">stub</span>':'');
+    d.innerHTML=`${esc(p.title)} ${tag}
       <div class="a">by ${esc(p.author)} · 권위 ${p.authority}</div>`;
     box.appendChild(d);
   });
+  // 질문 흐름: 검색어가 있으면 AI 답변 / 공개 질의로 이어갈 수 있게
+  const act=$('ask-actions');
+  if(!q){ act.innerHTML=''; }
+  else {
+    act.innerHTML =
+      (ps.length===0 ? '<div class="q" style="color:var(--warn);margin:4px 0">검증된 답이 없습니다. ↓</div>' : '')
+      + `<div style="display:flex;gap:6px;margin-bottom:6px">
+           <button style="flex:1" onclick="aiAnswer()">✨ AI 답변</button>
+           <button class="sec" style="flex:1" onclick="openQuery()">🙋 공개 질의</button>
+         </div>`;
+  }
+}
+function onAsk(){ loadList(); }
+async function loadQueries(){
+  const qs=await api('/queries'); const box=$('queries');
+  box.innerHTML = qs.length ? '' : '<small class="hint">열린 질의 없음</small>';
+  qs.forEach(p=>{ const d=document.createElement('div'); d.className='pitem';
+    d.onclick=()=>open(p.slug);
+    d.innerHTML=`🙋 ${esc(p.title)}<div class="a">by ${esc(p.author)}</div>`;
+    box.appendChild(d); });
+}
+async function aiAnswer(){
+  const q=$('search').value.trim(); if(!q) return;
+  try{ const p=await api('/ai-answer','POST',{question:q, author:who()});
+    $('search').value=''; await refresh(); open(p.slug);
+  }catch(e){ msg(e.message,true); }
+}
+async function openQuery(){
+  const q=$('search').value.trim(); if(!q) return;
+  try{ const p=await api('/queries','POST',{title:q, detail:'', author:who()});
+    $('search').value=''; await refresh(); open(p.slug);
+  }catch(e){ msg(e.message,true); }
+}
+async function answerQuery(slug){
+  const body=prompt('이 질의에 대한 답변 (마크다운):',''); if(!body) return;
+  try{ const p=await api('/queries/'+slug+'/answer','POST',{body, author:who(), title:''});
+    await refresh(); open(p.slug);
+  }catch(e){ msg(e.message,true); }
 }
 async function loadScores(){
   const s=await api('/scores');
@@ -202,8 +248,15 @@ async function open(slug){
     current=slug; editing=false;
     $('empty').style.display='none'; $('page').style.display='block';
     $('p-title').textContent=p.title;
-    $('p-by').innerHTML = p.is_stub ? '<span style="color:var(--stub)">빈 문서(stub) — 편집해서 채우세요</span>'
-      : `작성 ${esc(p.author)}${p.last_editor&&p.last_editor!==p.author?' · 편집 '+esc(p.last_editor):''} · 권위 ${p.authority}`;
+    if(p.kind==='query'){
+      $('p-by').innerHTML = p.status==='open'
+        ? `<span style="color:var(--warn)">🙋 열린 질의</span> · by ${esc(p.author)} · <button class="link" onclick="answerQuery('${p.slug}')">✍️ 답하기</button>`
+        : `🙋 질의(해결됨) · by ${esc(p.author)}`;
+    } else if(p.is_stub){
+      $('p-by').innerHTML = '<span style="color:var(--stub)">빈 문서(stub) — 편집해서 채우세요</span>';
+    } else {
+      $('p-by').innerHTML = `작성 ${esc(p.author)}${p.last_editor&&p.last_editor!==p.author?' · 편집 '+esc(p.last_editor):''} · 권위 ${p.authority}`;
+    }
     $('view').innerHTML = p.body.trim()? render(p.body) : '<small class="hint">내용이 없습니다. 편집을 눌러 작성하세요.</small>';
     $('editor').value = p.body;
     showView();
