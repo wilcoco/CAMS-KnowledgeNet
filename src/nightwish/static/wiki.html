@@ -19,6 +19,12 @@
     border-radius:6px; padding:7px 9px; font:inherit; }
   .grid { display:grid; grid-template-columns: 240px 1fr 240px; gap:0;
           height:calc(100vh - 49px); }
+  @media (max-width: 860px){
+    /* 좁은 화면(모바일): 3단을 위→아래로 쌓고 높이 고정 해제 */
+    .grid { grid-template-columns: 1fr; height:auto; }
+    aside, aside.right { border:0; border-bottom:1px solid var(--line); }
+    aside, .center { overflow:visible; }
+  }
   aside, .center { overflow:auto; padding:12px; }
   aside { border-right:1px solid var(--line); }
   aside.right { border-right:0; border-left:1px solid var(--line); }
