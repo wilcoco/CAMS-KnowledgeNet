@@ -99,9 +99,21 @@ class UnifiedService:
     @staticmethod
     def _load(path: str, hub_mode: str) -> tuple[OntologyTree, WikiEconomy]:
         if not os.path.exists(path):
+            # Cutover convenience: if there's a legacy ``wiki.json`` from the old
+            # MVP next to where the unified snapshot would live, seed from it
+            # (migrating the flat thread onto the recursive model). The legacy
+            # file is left untouched — the unified app writes forward to ``path``,
+            # so rolling back to ``nightwish-mvp`` still works.
+            legacy = os.path.join(os.path.dirname(os.path.abspath(path)), "wiki.json")
+            if os.path.abspath(legacy) != os.path.abspath(path) and os.path.exists(legacy):
+                return UnifiedService._from_file(legacy)
             from nightwish.scoring import ScoreEngine
 
             return OntologyTree(scoring=ScoreEngine(mode=hub_mode)), WikiEconomy()
+        return UnifiedService._from_file(path)
+
+    @staticmethod
+    def _from_file(path: str) -> tuple[OntologyTree, WikiEconomy]:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
         if "tree" in data:  # native unified snapshot

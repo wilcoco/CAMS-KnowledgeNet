@@ -1,4 +1,4 @@
-# Railway / Nixpacks build for the MVP wiki (nightwish.mvp:app).
+# Railway / Nixpacks build for the unified app (nightwish.unified:app).
 #
 # We create an explicit venv so `pip` is guaranteed present (the bare nix
 # `python311` doesn't put `pip` on PATH). Third-party deps install in the
@@ -19,4 +19,4 @@ cmds = [
 cmds = ["/opt/venv/bin/pip install --no-deps -e ."]
 
 [start]
-cmd = "/opt/venv/bin/python -m uvicorn nightwish.mvp:app --host 0.0.0.0 --port $PORT"
+cmd = "/opt/venv/bin/python -m uvicorn nightwish.unified:app --host 0.0.0.0 --port $PORT"

@@ -67,10 +67,35 @@ python examples/dividend_demo.py  # 부가가치-게이트 배당 라우팅 데�
 python examples/verified_wheel.py # [P0] 검증 닻이 배당을 여는 첫 바퀴
 
 pip install -e ".[dev]"           # + pytest, httpx
-python -m pytest -q               # 87개 테스트
+python -m pytest -q               # 111개 테스트
 ```
 
-### ⭐ MVP — 공유 LLM 위키 (Obsidian + LLM, 사용자 간 공유)
+### ⭐⭐ 통합 앱 (unified) — 하나의 재귀 지식 그래프 *(권장)*
+
+초기의 두 프로토타입(MVP 위키 + 온톨로지 서비스)을 **하나의 코어(`nightwish.tree`)
+위 단일 앱**으로 합친 것. 위키 페이지·열린 질의·링크 stub·AI 답변·모든
+follow/fork/기여가 **같은 한 종류의 노드**라, "질문 → 답 → 보강/후속질문/정정/다른
+답" 모듈이 **모든 슬롯에 재귀로** 적용된다(답도 또 하나의 슬롯).
+
+```bash
+pip install -e ".[service]"
+nightwish-app                     # 또는: uvicorn nightwish.unified:app
+# → http://127.0.0.1:8000/  검색·AI질문·재귀 스레드·레이어·권위/허브·민팅/인도스
+```
+
+- **한 노드 = 채워야 할 슬롯**: `POST /api/ask`(①검색→②AI 동결답) · 어떤 노드에든
+  `POST /api/nodes/{id}/contribute`(보강/정정/계승/후속질문, 재귀) · 열린 질의는
+  `POST /api/queries` + `/queries/{id}/answer`로 **같은 노드 자리에서** 답이 채워짐.
+- **레이어 일방막**: 스레드·검색 모두 `?space=` 존중(그룹 메모/검색 누수 차단).
+- **위키링크 권위 + 경제**: `[[..]]`가 stub 생성·권위 누적, `mint`/`endorse`(배당)·`ledger`.
+- 상태는 `$NIGHTWISH_APP_DB`(기본 `data/app.json`) 단일 스냅샷. 기존 `data/wiki.json`이
+  있으면 **자동 이관**(원본은 보존 → MVP로 롤백 가능).
+- 엔드포인트: `GET /api/{state,nodes,search,scores,graph,ledger,queries}`,
+  `POST /api/{ask,nodes,nodes/{id}/contribute,queries,queries/{id}/answer,mint,endorse}`.
+
+> 아래 **MVP**·**서비스**는 통합 앱의 모태가 된 레거시 프로토타입이다(현재도 동작).
+
+### MVP — 공유 LLM 위키 (Obsidian + LLM, 사용자 간 공유) *(레거시)*
 
 설계 §2.3의 **제3극(소유 O + 연결 O)** 을 가장 가볍게 구현한 제품. 마크다운 페이지를
 `[[위키링크]]` 로 잇고, LLM이 초안을 거들고, **누가 먼저 좋은 문서를 알아보고 링크했나
@@ -92,12 +117,13 @@ nightwish-mvp                     # 또는: uvicorn nightwish.mvp:app
 - **질문 순환(§6)**: 좌측 질문 상자 → ① `GET /api/search`(기존 검증지식) → 없으면 ② `POST /api/ai-answer`(AI가 답→문서화) → 부족하면 ③ `POST /api/queries`(공개 질의) → `POST /api/queries/{slug}/answer`(사람이 답→문서화·질의 해결). **질문·답변·질의가 전부 검색 대상 콘텐츠**가 되어 다음 질문을 더 잘 푼다(↻).
 - 엔드포인트: `GET/POST /api/pages`, `/api/search`, `/api/draft`, `/api/ai-answer`, `GET/POST /api/queries`, `/api/queries/{slug}/answer`, `/api/scores`, `/api/graph`, `/api/{mint,endorse,ledger}`, `/api/resolve/{title}`.
 
-**Railway 배포:** 이 저장소를 Railway에 연결하면 [`nixpacks.toml`](nixpacks.toml)/[`Procfile`](Procfile)
-이 `0.0.0.0:$PORT`로 `nightwish.mvp:app`을 띄운다. **브랜치별로 서비스를 따로 두면** 각
-브랜치가 독립 배포·독립 URL을 가진다. 상태 유지는 Railway Volume을 마운트하고
-`NIGHTWISH_WIKI_DB=/data/wiki.json` 로 지정.
+**Railway 배포:** 이 저장소를 Railway에 연결하면 [`nixpacks.toml`](nixpacks.toml)이
+`0.0.0.0:$PORT`로 **`nightwish.unified:app`**(통합 앱)을 띄운다. **브랜치별로 서비스를
+따로 두면** 각 브랜치가 독립 배포·독립 URL을 가진다. 상태 유지는 Railway Volume을
+마운트하고 `NIGHTWISH_APP_DB=/data/app.json` 로 지정(기존 `wiki.json` 볼륨이 있으면
+자동 이관). MVP만 따로 띄우려면 start 커맨드를 `nightwish.mvp:app`으로 바꾼다.
 
-### 서비스 실행 (온톨로지 엔진 데모 — HTTP API + 웹 UI)
+### 서비스 실행 (온톨로지 엔진 데모 — HTTP API + 웹 UI) *(레거시)*
 
 ```bash
 pip install -e ".[service]"       # + fastapi, uvicorn, pydantic
