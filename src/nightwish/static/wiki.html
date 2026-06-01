@@ -224,9 +224,10 @@ async function loadQueries(){
 }
 async function aiAnswer(){
   const q=$('search').value.trim(); if(!q) return;
+  $('ask-actions').innerHTML='<div class="q" style="color:var(--acc)">🤖 AI가 답하는 중…</div>';
   try{ const p=await api('/ai-answer','POST',{question:q, author:who()});
     $('search').value=''; await refresh(); open(p.slug);
-  }catch(e){ msg(e.message,true); }
+  }catch(e){ msg(e.message,true); $('ask-actions').innerHTML=''; }
 }
 async function openQuery(){
   const q=$('search').value.trim(); if(!q) return;
@@ -370,9 +371,10 @@ function drawGraph(idx, E){
 
 async function aiDraft(){
   const title = current ? $('p-title').textContent : ($('p-title').dataset.newtitle||$('p-title').textContent);
-  const prompt_ = prompt('AI에게 요청 (무엇을 적을까요?):','')||'';
+  if(!title){ msg('제목이 먼저 필요합니다', true); return; }
+  msg('AI가 작성 중…');
   try{
-    const d=await api('/draft','POST',{title, prompt:prompt_});
+    const d=await api('/draft','POST',{title, prompt:''});  // 제목이 곧 주제 — 다시 묻지 않음
     if(!editing) showEdit();
     $('editor').value = d.body;
     msg('AI 초안을 넣었습니다. 다듬고 저장하세요.');
