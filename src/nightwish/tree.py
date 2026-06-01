@@ -57,6 +57,10 @@ from nightwish.scoring import ScoreEngine
 #: author marker for an auto-created, not-yet-written stub node
 STUB_AUTHOR = "(stub)"
 
+#: How strongly endorsement (authority) lifts a textually-relevant search hit.
+#: Gentle on purpose — relevance still gates inclusion; this only re-orders.
+ADOPTION_BOOST = 0.05
+
 _LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 _SLUG_RE = re.compile(r"[^a-z0-9가-힣]+")
 
@@ -582,6 +586,11 @@ class OntologyTree:
             elif q in text:
                 score += 2.0
             if score > 0:
+                # Evaluation is adoption: among textually relevant hits, the
+                # ones the crowd endorsed (higher authority) rise — so a
+                # well-evaluated Q&A becomes the answer the next question gets.
+                authority = self.scoring.authority_of(node.id)
+                score *= 1.0 + ADOPTION_BOOST * authority
                 scored.append((score, node))
         scored.sort(key=lambda sn: (-sn[0], -sn[1].updated_at))
         return [n for _s, n in scored[:limit]]

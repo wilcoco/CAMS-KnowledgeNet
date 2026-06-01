@@ -42,6 +42,8 @@
            color:var(--mut); }
   .badge.frozen { color:var(--warn); border-color:var(--warn); }
   .badge.query { color:var(--good); border-color:var(--good); }
+  .badge.co.author { color:var(--acc); border-color:var(--acc); }
+  .badge.co.evaluator { color:var(--link); border-color:var(--link); }
   .answer { white-space:pre-wrap; background:var(--panel); border:1px solid var(--line);
             border-radius:8px; padding:12px; margin:8px 0; }
   .node-head { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
@@ -215,6 +217,17 @@ function actbar(id){
   </div>`;
 }
 
+// 평가 = 저작: 원저자 + 평가(인도스)로 이 지식을 자기 것으로 인정한 사람들
+function coauthorsHTML(list){
+  if (!list || !list.length) return '';
+  const chips = list.map(a => {
+    const role = a.role==='author' ? '원저자' : '평가자(저작)';
+    const stk = a.staked ? ` ·스테이크 ${a.staked}` : '';
+    return `<span class="badge co ${a.role}" title="안목 ${a.hub}${stk}">${esc(a.user)} · ${role}</span>`;
+  }).join(' ');
+  return `<div class="prov">저작: ${chips}</div>`;
+}
+
 function renderNode(n){
   current = n;
   const c = $('#center');
@@ -237,6 +250,7 @@ function renderNode(n){
       <span class="badge">${esc(n.space)}</span>
     </div>
     <div class="prov">${prov} · 권위 ${n.authority} · 스테이크 ${n.staked}</div>
+    ${coauthorsHTML(n.coauthors)}
     ${n.is_query ? '' : `<div class="answer">${renderText(n.answer)}</div>`}
     ${queryAnswer}${endorse}
     ${n.backlinks && n.backlinks.length ? `<div class="prov">백링크: ${

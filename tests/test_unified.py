@@ -125,6 +125,41 @@ def test_wikilink_authority_and_endorse_dividend(client):
     assert ledger["burned"] > 0
 
 
+# -- evaluation IS authorship ------------------------------------------------
+def test_endorsing_makes_the_evaluator_a_coauthor_with_foresight(client):
+    nid = client.post("/api/ask", json={"question": "평가저작Q", "author": "author1"}).json()["node"]["id"]
+    client.post("/api/mint", json={"account": "early", "amount": 100})
+    client.post("/api/mint", json={"account": "late", "amount": 100})
+
+    # 'early' evaluates first, then 'late' — both become co-authors, in order
+    r1 = client.post("/api/endorse", json={"account": "early", "node_id": nid, "amount": 30}).json()
+    co_users = [c["user"] for c in r1["coauthors"]]
+    assert co_users == ["author1", "early"]
+    assert r1["coauthors"][1]["role"] == "evaluator"
+
+    client.post("/api/endorse", json={"account": "late", "node_id": nid, "amount": 30})
+    view = client.get(f"/api/nodes/{nid}").json()
+    co = {c["user"]: c for c in view["coauthors"]}
+    assert set(co) == {"author1", "early", "late"}
+    # the earlier evaluator earned more foresight(hub) than the later one
+    assert co["early"]["hub"] > co["late"]["hub"]
+
+    # endorsing again does not duplicate a co-author
+    again = client.post("/api/endorse", json={"account": "early", "node_id": nid, "amount": 10}).json()
+    assert [c["user"] for c in again["coauthors"]].count("early") == 1
+
+
+def test_endorsement_lifts_a_qa_in_search_adoption(client):
+    # two answers that both match the query; one gets evaluated (adopted)
+    a = client.post("/api/ask", json={"question": "용접 결함 원인", "author": "a"}).json()["node"]["id"]
+    client.post("/api/ask", json={"question": "용접 결함 점검", "author": "b"})
+    client.post("/api/mint", json={"account": "crowd", "amount": 100})
+    client.post("/api/endorse", json={"account": "crowd", "node_id": a, "amount": 80})
+
+    hits = client.get("/api/search", params={"q": "용접 결함", "space": "public"}).json()
+    assert hits[0]["id"] == a            # the endorsed (adopted) Q&A surfaces first
+
+
 # -- persistence round-trips the whole unified snapshot ----------------------
 def test_state_persists_across_reload(client):
     nid = client.post("/api/ask", json={"question": "영속질문", "author": "a"}).json()["node"]["id"]

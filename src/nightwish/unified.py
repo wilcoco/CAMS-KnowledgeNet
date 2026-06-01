@@ -253,6 +253,26 @@ class EndorseBody(BaseModel):
 # --------------------------------------------------------------------------- #
 # views                                                                       #
 # --------------------------------------------------------------------------- #
+def _coauthors(svc: UnifiedService, node_id: str) -> list[dict]:
+    """The node's authorship: the original author, then evaluators in order.
+
+    Endorsing (evaluating) a Q&A links the evaluator to it, so the people who
+    *recognised* the knowledge co-author it — earliest first, each tagged with
+    the foresight(hub) their evaluation earned.
+    """
+    t = svc.tree
+    n = t.nodes[node_id]
+    chain: list[dict] = [{"user": n.author, "role": "author",
+                          "hub": round(t.scoring.hub_of(n.author), 4)}]
+    for ev in t.scoring.link_order(node_id):
+        if ev == n.author:
+            continue
+        chain.append({"user": ev, "role": "evaluator",
+                      "hub": round(t.scoring.hub_of(ev), 4),
+                      "staked": round(svc.econ.staked_on(node_id).get(ev, 0.0), 4)})
+    return chain
+
+
 def _node_view(svc: UnifiedService, node_id: str, space: str, *, full: bool = False) -> dict:
     t = svc.tree
     n = t.nodes[node_id]
@@ -266,6 +286,7 @@ def _node_view(svc: UnifiedService, node_id: str, space: str, *, full: bool = Fa
         "links": list(n.links), "updated_at": n.updated_at,
         "authority": round(t.scoring.authority_of(n.id), 4),
         "staked": round(sum(svc.econ.staked_on(n.id).values()), 4),
+        "coauthors": _coauthors(svc, n.id),
     }
     if full:
         view["thread"] = _thread(svc, n.id, space)
@@ -537,12 +558,22 @@ def create_app() -> FastAPI:
                 )
             except (InsufficientPoints, ValueError) as e:
                 raise HTTPException(400, str(e))
+            # Evaluation *is* authorship: the act of endorsing links the
+            # evaluator to the node, growing their 안목(hub/foresight) and the
+            # node's authority. Earliest evaluators of a Q&A that later draws
+            # more endorsement earn the most — the patent's "who saw it first".
+            # We link once per evaluator (idempotent on repeat endorsements) so
+            # the co-author set is the distinct chain of people who staked.
+            first_time = svc.tree.scoring.linker_position(body.account, body.node_id) is None
+            if first_time and body.account != n.author:
+                svc.tree.scoring.link(body.account, body.node_id, weight=body.amount)
             svc.save()
             return {
                 "account": body.account,
                 "balance": round(svc.econ.balance(body.account), 4),
                 "payouts": {k: round(v, 4) for k, v in payouts.items()},
                 "staked_on_node": round(sum(svc.econ.staked_on(body.node_id).values()), 4),
+                "coauthors": _coauthors(svc, body.node_id),
             }
 
     @app.get("/api/ledger")
