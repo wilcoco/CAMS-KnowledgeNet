@@ -64,6 +64,8 @@
   #overlay header { background:transparent; }
   #overlay .close { margin-left:auto; }
   #gcanvas { flex:1; width:100%; display:block; cursor:grab; }
+  #mini { width:100%; height:200px; background:#0c0e13; border:1px solid var(--line);
+          border-radius:8px; cursor:pointer; }
 </style>
 </head>
 <body>
@@ -124,6 +126,10 @@
       <button class="sec" onclick="mint()">발행</button>
     </div>
     <div id="pt-msg" class="msg"></div>
+
+    <h2 class="sec">🧩 이 문서의 의미망 (온톨로지)</h2>
+    <small class="hint">중심=현재 문서, 주변=연결된 문서. 클릭하면 이동</small>
+    <canvas id="mini"></canvas>
 
     <h2 class="sec">백링크 (이 문서를 가리킴)</h2>
     <div id="backlinks" class="bl"><small class="hint">없음</small></div>
@@ -270,6 +276,7 @@ async function open(slug){
     $('backlinks').innerHTML = p.backlinks.length
       ? p.backlinks.map(b=>`<div><button class="link" onclick="open('${b.slug}')">${esc(b.title)}</button> <span class="n">by ${esc(b.author)}</span></div>`).join('')
       : '<small class="hint">없음</small>';
+    loadMini(slug);
     msg('');
   }catch(e){ msg(e.message,true); }
 }
@@ -367,6 +374,36 @@ function drawGraph(idx, E){
     gctx.beginPath(); gctx.arc(n.x,n.y,r,0,7); gctx.fillStyle=n.is_stub?'#c98a8a':'#7aa2ff'; gctx.fill();
     gctx.fillStyle='#cfd6e4'; gctx.font='11px system-ui';
     gctx.fillText((n.title||'').slice(0,16), n.x+r+3, n.y+4); }
+}
+
+// ---- 우측 미니 의미망 (현재 문서 1-hop 이웃) ----
+let miniNodes=[];
+async function loadMini(slug){
+  const cv=$('mini'); if(!cv) return;
+  let g; try{ g=await api('/graph'); }catch(e){ return; }
+  const W=cv.width=cv.clientWidth||220, H=cv.height=200, ctx=cv.getContext('2d');
+  ctx.clearRect(0,0,W,H);
+  const byId={}; g.nodes.forEach(n=>byId[n.slug]=n);
+  const nb=new Set();
+  g.edges.forEach(e=>{ if(e.source===slug)nb.add(e.target); if(e.target===slug)nb.add(e.source); });
+  const center=byId[slug];
+  if(!center){ ctx.fillStyle='#9aa3b2'; ctx.font='12px system-ui'; ctx.fillText('연결 없음', 10, 24); miniNodes=[]; return; }
+  const neighbors=[...nb].map(s=>byId[s]).filter(Boolean).slice(0,12);
+  if(!neighbors.length){ ctx.fillStyle='#9aa3b2'; ctx.font='12px system-ui'; ctx.fillText('아직 연결 없음 — [[링크]]를 추가해보세요', 8, 24); }
+  const cx=W/2, cy=H/2, R=Math.min(W,H)/2-26;
+  center.x=cx; center.y=cy; miniNodes=[center];
+  neighbors.forEach((n,i)=>{ const a=i/neighbors.length*2*Math.PI - Math.PI/2;
+    n.x=cx+Math.cos(a)*R; n.y=cy+Math.sin(a)*R; miniNodes.push(n); });
+  ctx.strokeStyle='#3a4252'; ctx.lineWidth=1;
+  neighbors.forEach(n=>{ ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(n.x,n.y); ctx.stroke(); });
+  miniNodes.forEach(n=>{ const isC=n.slug===slug, r=isC?7:5;
+    ctx.beginPath(); ctx.arc(n.x,n.y,r,0,7);
+    ctx.fillStyle=isC?'#ffcf6b':(n.is_stub?'#c98a8a':'#7aa2ff'); ctx.fill();
+    ctx.fillStyle='#cfd6e4'; ctx.font='10px system-ui';
+    ctx.fillText((n.title||'').slice(0,9), n.x+r+2, n.y+3); });
+  cv.onclick=(ev)=>{ const rct=cv.getBoundingClientRect(), mx=ev.clientX-rct.left, my=ev.clientY-rct.top;
+    let hit=null,best=300; for(const n of miniNodes){ const d=(n.x-mx)**2+(n.y-my)**2; if(d<best){best=d;hit=n;} }
+    if(hit&&hit.slug!==slug) open(hit.slug); };
 }
 
 async function aiDraft(){
