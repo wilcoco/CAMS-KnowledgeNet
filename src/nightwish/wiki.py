@@ -27,8 +27,13 @@ import re
 import tempfile
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from nightwish.scoring import ScoreEngine
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 WIKILINK_RE = re.compile(r"\[\[([^\[\]]+)\]\]")
 STUB_AUTHOR = "(stub)"
@@ -86,6 +91,14 @@ class Page:
     kind: str = "page"
     #: for a query: "open" (awaiting answers) or "resolved"
     status: str = "open"
+    #: a frozen AI answer is immutable (provenance-stamped) — edit via contributions
+    frozen: bool = False
+    #: model that produced a frozen answer (e.g. "claude-opus-4-8" / "offline-stub")
+    model: str = ""
+    #: ISO timestamp the answer was produced
+    answered_at: str = ""
+    #: thread of human (and follow-up AI) contributions layered on this node
+    contributions: list = field(default_factory=list)
 
     @property
     def is_stub(self) -> bool:
@@ -198,6 +211,38 @@ class Wiki:
             p for p in self.list_pages() if p.is_query and p.status == "open"
         ]
 
+    # -- frozen answers + contribution thread --------------------------------
+    def mark_answered(self, slug: str, model: str) -> Page:
+        """Freeze a page as a provenance-stamped AI answer (immutable body)."""
+        page = self.pages[slug]
+        page.frozen = True
+        page.model = model
+        page.answered_at = _now_iso()
+        return page
+
+    def add_contribution(
+        self, slug: str, kind: str, author: str, body: str, *, model: str = ""
+    ) -> dict:
+        """Append a contribution to a node's thread (no edit of the frozen body).
+
+        ``kind`` ∈ comment(의견/보강) · fork(정정/다른 답) · followup(후속질문) ·
+        answer(후속질문에 대한 AI 답). Each entry is attributed (who/when/model).
+        """
+        page = self.pages.get(slug)
+        if page is None:
+            raise ValueError(f"unknown page {slug!r}")
+        entry = {
+            "id": f"c{self._tick()}",
+            "kind": kind,
+            "author": author,
+            "body": body,
+            "model": model,
+            "created_at": _now_iso(),
+        }
+        page.contributions.append(entry)
+        page.updated_at = self._tick()
+        return entry
+
     # -- read -----------------------------------------------------------------
     def get(self, slug: str) -> Page | None:
         return self.pages.get(slug)
@@ -278,6 +323,8 @@ class Wiki:
                     "author": p.author, "created_at": p.created_at,
                     "updated_at": p.updated_at, "last_editor": p.last_editor,
                     "links": list(p.links), "kind": p.kind, "status": p.status,
+                    "frozen": p.frozen, "model": p.model,
+                    "answered_at": p.answered_at, "contributions": list(p.contributions),
                 }
                 for p in self.pages.values()
             ],
@@ -301,6 +348,9 @@ class Wiki:
                 updated_at=d["updated_at"], last_editor=d.get("last_editor", ""),
                 links=list(d.get("links", [])),
                 kind=d.get("kind", "page"), status=d.get("status", "open"),
+                frozen=d.get("frozen", False), model=d.get("model", ""),
+                answered_at=d.get("answered_at", ""),
+                contributions=list(d.get("contributions", [])),
             )
         return wiki
 

@@ -64,6 +64,8 @@ def offline_draft(title: str, prompt: str) -> str:
 _ai_fn: Callable[[str, str], str] = offline_draft
 #: relation extractor (title, body) -> list[triple]; None until LLM configured
 _relations_fn: Optional[Callable[[str, str], list]] = None
+#: model id stamped onto frozen answers ("offline-stub" until LLM configured)
+_ai_model: str = "offline-stub"
 
 
 def set_ai(fn: Callable[[str, str], str]) -> None:
@@ -74,12 +76,13 @@ def set_ai(fn: Callable[[str, str], str]) -> None:
 
 def configure_ai() -> bool:
     """Activate Claude-backed draft + relation extraction if enabled. Returns success."""
-    global _relations_fn
-    from nightwish.llm import make_draft_fn, make_relation_fn
+    global _relations_fn, _ai_model
+    from nightwish.llm import DEFAULT_MODEL, make_draft_fn, make_relation_fn
 
     draft = make_draft_fn()
     if draft is not None:
         set_ai(draft)
+        _ai_model = DEFAULT_MODEL
     _relations_fn = make_relation_fn()
     return draft is not None
 
@@ -190,6 +193,12 @@ class ExtractBody(BaseModel):
     slug: str = Field(min_length=1)
 
 
+class ContribBody(BaseModel):
+    kind: str = "comment"  # comment | fork | followup
+    author: str = Field(min_length=1)
+    body: str = ""
+
+
 def _page_view(svc: WikiService, slug: str, *, full: bool = False) -> dict:
     p = svc.wiki.get(slug)
     view = {
@@ -197,9 +206,11 @@ def _page_view(svc: WikiService, slug: str, *, full: bool = False) -> dict:
         "last_editor": p.last_editor, "updated_at": p.updated_at,
         "is_stub": p.is_stub, "authority": round(svc.wiki.authority_of(p.slug), 4),
         "links": list(p.links), "kind": p.kind, "status": p.status,
+        "frozen": p.frozen, "model": p.model, "answered_at": p.answered_at,
     }
     if full:
         view["body"] = p.body
+        view["contributions"] = list(p.contributions)
         view["backlinks"] = [
             {"slug": b.slug, "title": b.title, "author": b.author}
             for b in svc.wiki.backlinks(slug)
@@ -262,12 +273,39 @@ def create_app() -> FastAPI:
     def save_page(body: SaveBody):
         svc = get_service()
         with svc._lock:
+            existing = svc.wiki.get_by_title(body.title)
+            if existing is not None and existing.frozen:
+                raise HTTPException(
+                    409, "동결된 AI 답변은 직접 수정할 수 없습니다 — 기여(의견/정정/후속질문)로 추가하세요"
+                )
             try:
                 page = svc.wiki.save_page(body.title, body.body, body.author)
             except ValueError as e:
                 raise HTTPException(400, str(e))
             svc.save()
             return _page_view(svc, page.slug, full=True)
+
+    @app.post("/api/pages/{slug}/contribute")
+    def contribute(slug: str, body: ContribBody):
+        """Append a contribution to a node's thread (instead of editing it).
+
+        kind=followup also generates an AI answer entry below the question.
+        """
+        svc = get_service()
+        with svc._lock:
+            page = svc.wiki.get(slug)
+            if page is None or page.is_stub:
+                raise HTTPException(404, f"page {slug!r} not found or empty")
+            kind = body.kind if body.kind in ("comment", "fork", "followup") else "comment"
+            svc.wiki.add_contribution(slug, kind, body.author, body.body)
+            if kind == "followup" and body.body.strip():
+                try:
+                    ans = _ai_fn(body.body, "")
+                except Exception:
+                    ans = offline_draft(body.body, "")
+                svc.wiki.add_contribution(slug, "answer", "AI", ans, model=_ai_model)
+            svc.save()
+            return _page_view(svc, slug, full=True)
 
     @app.post("/api/draft")
     def draft(body: DraftBody):
@@ -290,6 +328,7 @@ def create_app() -> FastAPI:
             except Exception:
                 text = offline_draft(body.question, "")
             page = svc.wiki.save_page(body.question, text, body.author)
+            svc.wiki.mark_answered(page.slug, _ai_model)  # 모델·날짜 박제(동결)
             svc.save()
             return _page_view(svc, page.slug, full=True)
 

@@ -66,6 +66,14 @@
   #gcanvas { flex:1; width:100%; display:block; cursor:grab; }
   #mini { width:100%; height:200px; background:#0c0e13; border:1px solid var(--line);
           border-radius:8px; cursor:pointer; }
+  .frozen-tag { font-size:11px; color:#0a0c10; background:var(--good); padding:1px 7px;
+                border-radius:10px; }
+  .centry { border-left:2px solid var(--line); margin:8px 0; padding:3px 11px; }
+  .centry.answer { border-left-color:var(--acc); }
+  .centry.fork { border-left-color:var(--warn); }
+  .centry.followup { border-left-color:var(--good); }
+  .centry .ch { font-size:11px; color:var(--mut); }
+  .centry .cb { margin-top:2px; white-space:pre-wrap; }
 </style>
 </head>
 <body>
@@ -113,6 +121,13 @@
       </div>
       <div id="view" class="view"></div>
       <textarea id="editor" style="display:none"></textarea>
+      <div id="thread"></div>
+      <div class="toolbar" id="contrib-bar" style="display:none;margin-top:12px">
+        <span class="ch">기여:</span>
+        <button class="sec" onclick="contribute('comment')">➕ 의견/보강</button>
+        <button class="sec" onclick="contribute('followup')">❓ 후속질문</button>
+        <button class="sec" onclick="contribute('fork')">✏️ 정정/다른 답</button>
+      </div>
     </div>
   </section>
 
@@ -260,6 +275,26 @@ async function answerQuery(slug){
     await refresh(); open(p.slug);
   }catch(e){ msg(e.message,true); }
 }
+const KIND_LABEL={comment:'💬 의견',fork:'✏️ 정정/다른 답',followup:'❓ 후속질문',answer:'🤖 AI 답'};
+function renderThread(items){
+  const box=$('thread');
+  if(!items.length){ box.innerHTML=''; return; }
+  box.innerHTML='<h2 class="sec">🧵 기여 스레드</h2>'+items.map(c=>{
+    const who_ = c.kind==='answer' ? `AI · ${esc(c.model||'')}` : esc(c.author);
+    const dt=(c.created_at||'').slice(0,10);
+    return `<div class="centry ${c.kind}"><div class="ch">${KIND_LABEL[c.kind]||c.kind} · ${who_} · ${dt}</div>
+      <div class="cb">${render(c.body||'')}</div></div>`;
+  }).join('');
+}
+async function contribute(kind){
+  if(!current){ msg('문서를 먼저 선택', true); return; }
+  const label = kind==='followup'?'후속 질문을 입력하세요':(kind==='fork'?'정정/다른 답 (마크다운)':'의견/보강 (마크다운)');
+  const body=prompt(label,''); if(!body) return;
+  try{ const p=await api('/pages/'+current+'/contribute','POST',{kind, author:who(), body});
+    await refresh(); open(current);
+    msg(kind==='followup'?'후속질문 + AI 답 추가됨':'기여 추가됨');
+  }catch(e){ msg(e.message,true); }
+}
 async function loadScores(){
   const s=await api('/scores');
   $('toppages').innerHTML = s.top_pages.map((p,i)=>
@@ -278,6 +313,9 @@ async function open(slug){
       $('p-by').innerHTML = p.status==='open'
         ? `<span style="color:var(--warn)">🙋 열린 질의</span> · by ${esc(p.author)} · <button class="link" onclick="answerQuery('${p.slug}')">✍️ 답하기</button>`
         : `🙋 질의(해결됨) · by ${esc(p.author)}`;
+    } else if(p.frozen){
+      const dt=(p.answered_at||'').slice(0,10);
+      $('p-by').innerHTML = `<span class="frozen-tag">🔒 동결</span> 🤖 ${esc(p.model||'AI')} · ${esc(dt)} · 질문자 ${esc(p.author)}`;
     } else if(p.is_stub){
       $('p-by').innerHTML = '<span style="color:var(--stub)">빈 문서(stub) — 편집해서 채우세요</span>';
     } else {
@@ -286,6 +324,13 @@ async function open(slug){
     $('view').innerHTML = p.body.trim()? render(p.body) : '<small class="hint">내용이 없습니다. 편집을 눌러 작성하세요.</small>';
     $('editor').value = p.body;
     showView();
+    // 동결된 AI 답변은 직접편집 불가 → 편집/AI초안 숨기고 기여 버튼 노출
+    $('btn-edit').style.display = p.frozen ? 'none' : 'inline-block';
+    document.querySelectorAll('.toolbar button.sec').forEach(b=>{
+      if(b.textContent.includes('AI 초안')) b.style.display = p.frozen?'none':'inline-block';
+    });
+    $('contrib-bar').style.display = (p.kind==='query'||p.is_stub) ? 'none' : 'flex';
+    renderThread(p.contributions||[]);
     $('backlinks').innerHTML = p.backlinks.length
       ? p.backlinks.map(b=>`<div><button class="link" onclick="open('${b.slug}')">${esc(b.title)}</button> <span class="n">by ${esc(b.author)}</span></div>`).join('')
       : '<small class="hint">없음</small>';
