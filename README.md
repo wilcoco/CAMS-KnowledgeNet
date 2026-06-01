@@ -35,6 +35,7 @@
 |------|------|------|
 | **설계 기록** | [`docs/design/`](docs/design/) | 1차 설계 논의 정리본(원본) · 용어집 · 진화 계보 |
 | **실행 로드맵** | [`docs/roadmap.md`](docs/roadmap.md) | 부트스트랩(첫 카토 온보딩) · MVP 우선순위 · 검증 닻 · 화폐공학 · 거버넌스 · 법무 |
+| **B2B 피벗** | [`docs/b2b-pivot.md`](docs/b2b-pivot.md) | "현실 접점"(오라클·환전·부트스트랩)을 조직 경계로 닫는 정공법 · 가치제안 · 파일럿 정의 |
 | **설계 비평/압박 테스트** | [`docs/critique.md`](docs/critique.md) | 화폐공학 균열 · 폰지 방어 · 거버넌스 급소 · 사상적 검토를 적대적으로 재검 |
 | **프로토타입 매핑** | [`docs/prototype.md`](docs/prototype.md) | 설계 개념 → 코드 1:1 대응표 |
 | **아키텍처 3층** | [`docs/architecture-layers.md`](docs/architecture-layers.md) | 기판(Nostr) · 구조(지식그래프) · **시장(우리 고유)** — 외부 기술을 분류하는 정본 프레임 |
