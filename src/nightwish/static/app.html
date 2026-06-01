@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Nightwish — 통합 지식 그래프</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#2a2f3a; --fg:#e6e8ee;
+          --mut:#9aa3b2; --acc:#7aa2ff; --good:#5ad19a; --warn:#ffcf6b;
+          --link:#8ab4ff; --stub:#c98a8a; --fork:#e0a0ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.6 system-ui,"Apple SD Gothic Neo",sans-serif; }
+  header { padding:10px 16px; border-bottom:1px solid var(--line); display:flex;
+           gap:12px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; }
+  header .stat { color:var(--mut); font-size:12px; }
+  header .spacer { flex:1; }
+  input, textarea, select { background:#0c0e13; color:var(--fg);
+    border:1px solid var(--line); border-radius:6px; padding:7px 9px; font:inherit; }
+  .grid { display:grid; grid-template-columns:340px 1fr 270px; gap:0;
+          height:calc(100vh - 51px); }
+  aside, .center { overflow:auto; padding:12px; }
+  aside { border-right:1px solid var(--line); }
+  aside.right { border-right:0; border-left:1px solid var(--line); }
+  @media (max-width:880px){ .grid { grid-template-columns:1fr; height:auto; } }
+  h2.sec { font-size:11px; color:var(--acc); text-transform:uppercase;
+           letter-spacing:.5px; margin:16px 0 6px; }
+  button { background:var(--acc); color:#0a0c10; border:0; border-radius:6px;
+           padding:7px 11px; font-weight:600; cursor:pointer; }
+  button.sec { background:#252a35; color:var(--fg); }
+  button.link { background:none; color:var(--link); padding:0; font-weight:400;
+                cursor:pointer; border:0; }
+  #search { width:100%; }
+  .row { display:flex; gap:6px; align-items:center; margin-top:6px; }
+  .item { padding:8px 10px; border:1px solid var(--line); border-radius:8px;
+          margin:6px 0; cursor:pointer; background:var(--panel); }
+  .item:hover { border-color:var(--acc); }
+  .item .t { font-weight:600; }
+  .item .m { color:var(--mut); font-size:12px; }
+  .badge { font-size:11px; padding:1px 6px; border-radius:10px; border:1px solid var(--line);
+           color:var(--mut); }
+  .badge.frozen { color:var(--warn); border-color:var(--warn); }
+  .badge.query { color:var(--good); border-color:var(--good); }
+  .answer { white-space:pre-wrap; background:var(--panel); border:1px solid var(--line);
+            border-radius:8px; padding:12px; margin:8px 0; }
+  .node-head { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
+  .node-head h3 { margin:0; font-size:18px; }
+  .prov { color:var(--mut); font-size:12px; }
+  .thread { margin-top:10px; }
+  .c { border-left:2px solid var(--line); padding:6px 0 6px 12px; margin:6px 0 6px 4px; }
+  .c .who { font-size:12px; }
+  .c.fork { border-color:var(--fork); }
+  .c.follow { border-color:var(--good); }
+  .c .body { white-space:pre-wrap; margin:2px 0; }
+  .kind-tag { font-size:11px; color:var(--mut); }
+  .actbar { display:flex; gap:6px; flex-wrap:wrap; margin-top:4px; }
+  .actbar button { padding:3px 8px; font-size:12px; font-weight:500; }
+  .reply { margin-top:6px; }
+  .reply textarea { width:100%; min-height:50px; }
+  .empty { color:var(--mut); padding:20px; text-align:center; }
+  .sc { display:flex; justify-content:space-between; font-size:13px; padding:2px 0; }
+  .sc .v { color:var(--good); }
+  a.wl { color:var(--link); cursor:pointer; }
+  .err { color:var(--stub); font-size:12px; }
+  code { background:#0c0e13; padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Nightwish</h1>
+  <span class="stat" id="stat">…</span>
+  <span class="spacer"></span>
+  <label class="m">레이어</label>
+  <select id="space" title="보는 층 (공용 commons + 그룹 오버레이)">
+    <option value="public">public (공용)</option>
+  </select>
+  <input id="space-new" placeholder="그룹 id 추가" style="width:110px" />
+  <button class="sec" id="add-space">+</button>
+  <label class="m">나</label>
+  <input id="me" value="anon" style="width:90px" />
+</header>
+
+<div class="grid">
+  <!-- LEFT: ask / search / queries -->
+  <aside>
+    <h2 class="sec">질문하기 · 검색</h2>
+    <textarea id="search" rows="3" placeholder="궁금한 것을 적고 Enter로 검색, 또는 AI에게 질문"></textarea>
+    <div class="row">
+      <button id="btn-search" class="sec">검색</button>
+      <button id="btn-ask">AI에게 질문</button>
+    </div>
+    <div id="results"></div>
+
+    <h2 class="sec">열린 질의 <button class="link" id="new-query">+ 새 질의</button></h2>
+    <div id="query-form" style="display:none">
+      <input id="q-title" placeholder="공개 질문 제목" style="width:100%" />
+      <textarea id="q-detail" rows="2" placeholder="배경/근거(선택)" style="width:100%;margin-top:4px"></textarea>
+      <div class="row"><button id="q-post">질의 등록</button></div>
+    </div>
+    <div id="queries"></div>
+  </aside>
+
+  <!-- CENTER: node detail + recursive thread -->
+  <section class="center" id="center">
+    <div class="empty">왼쪽에서 답을 고르거나, AI에게 질문해 새 노드를 만드세요.</div>
+  </section>
+
+  <!-- RIGHT: scores + economy -->
+  <aside class="right">
+    <h2 class="sec">권위 (내용 가치)</h2>
+    <div id="top-nodes"></div>
+    <h2 class="sec">허브 (안목)</h2>
+    <div id="top-hubs"></div>
+    <h2 class="sec">포인트 경제</h2>
+    <div class="row"><input id="mint-amt" type="number" value="100" style="width:80px" />
+      <button id="btn-mint" class="sec">민팅</button></div>
+    <div id="ledger" class="prov" style="margin-top:8px"></div>
+  </aside>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const api = async (m, url, body) => {
+  const r = await fetch(url, {method:m, headers:{'Content-Type':'application/json'},
+    body: body ? JSON.stringify(body) : undefined});
+  if (!r.ok) { const t = await r.text(); throw new Error(t); }
+  return r.json();
+};
+const space = () => $('#space').value;
+const me = () => $('#me').value.trim() || 'anon';
+const esc = s => (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let current = null;
+
+// render [[wikilinks]] as clickable
+function renderText(t){
+  return esc(t).replace(/\[\[([^\]]+)\]\]/g, (_,n)=>`<a class="wl" data-link="${esc(n)}">${esc(n)}</a>`);
+}
+function wireLinks(el){
+  el.querySelectorAll('a.wl').forEach(a=>a.onclick=()=>{
+    $('#search').value = a.dataset.link; doSearch();
+  });
+}
+
+async function refreshStat(){
+  const s = await api('GET','/api/state');
+  $('#stat').textContent =
+    `노드 ${s.node_count} · 질의 ${s.query_count} · stub ${s.stub_count} · ${s.hub_mode}`;
+}
+
+function nodeItem(n){
+  const b = n.is_query ? '<span class="badge query">질의</span>'
+          : n.frozen ? '<span class="badge frozen">AI·동결</span>' : '';
+  const d = document.createElement('div');
+  d.className = 'item';
+  d.innerHTML = `<div class="t">${esc(n.title)} ${b}</div>
+    <div class="m">${esc(n.author)} · 권위 ${n.authority} · 스테이크 ${n.staked}</div>`;
+  d.onclick = ()=> openNode(n.id);
+  return d;
+}
+
+async function doSearch(){
+  const q = $('#search').value.trim();
+  const res = await api('GET', `/api/search?q=${encodeURIComponent(q)}&space=${space()}`);
+  const box = $('#results'); box.innerHTML = '';
+  if (!res.length) box.innerHTML = '<div class="prov">검색 결과 없음 — AI에게 질문해보세요.</div>';
+  res.forEach(n => box.appendChild(nodeItem(n)));
+}
+
+async function doAsk(){
+  const q = $('#search').value.trim();
+  if (!q) return;
+  const r = await api('POST','/api/ask',{question:q, author:me(), space:space()});
+  await refreshStat(); renderNode(r.node);
+}
+
+async function loadQueries(){
+  const qs = await api('GET',`/api/queries?space=${space()}`);
+  const box = $('#queries'); box.innerHTML = '';
+  if (!qs.length) box.innerHTML = '<div class="prov">열린 질의 없음.</div>';
+  qs.forEach(n => box.appendChild(nodeItem(n)));
+}
+
+async function openNode(id){
+  const n = await api('GET',`/api/nodes/${encodeURIComponent(id)}?space=${space()}`);
+  renderNode(n);
+}
+
+function threadHTML(list){
+  if (!list.length) return '';
+  return '<div class="thread">' + list.map(c => {
+    const cls = c.kind==='fork' ? 'fork' : c.kind==='follow' ? 'follow' : '';
+    const tag = {comment:'보강', fork:'정정/다른 답', follow:'계승',
+                 contribute: c.title ? '후속질문' : '기여', root:'답'}[c.kind] || c.kind;
+    const frozen = c.frozen ? ' <span class="badge frozen">AI</span>' : '';
+    const title = c.title ? `<div class="who"><b>${esc(c.title)}</b></div>` : '';
+    return `<div class="c ${cls}">
+      <div class="who"><span class="kind-tag">${tag}</span> · ${esc(c.author)}${frozen}
+        · 권위 ${c.authority}</div>
+      ${title}
+      <div class="body">${renderText(c.body)}</div>
+      ${actbar(c.id)}
+      <div class="reply" id="reply-${c.id}"></div>
+      ${threadHTML(c.replies)}
+    </div>`;
+  }).join('') + '</div>';
+}
+
+function actbar(id){
+  return `<div class="actbar">
+    <button class="sec" data-act="comment" data-id="${id}">보강</button>
+    <button class="sec" data-act="fork" data-id="${id}">정정/다른 답</button>
+    <button class="sec" data-act="follow" data-id="${id}">계승</button>
+    <button class="sec" data-act="followup" data-id="${id}">후속질문</button>
+  </div>`;
+}
+
+function renderNode(n){
+  current = n;
+  const c = $('#center');
+  const prov = n.frozen
+    ? `AI 답변 · <code>${esc(n.model)}</code> · ${esc(n.answered_at)} (동결 — 편집은 기여로)`
+    : `${esc(n.author)} 작성 · 최근 편집 ${esc(n.last_editor)}`;
+  const queryAnswer = n.is_query ? `
+    <div class="row"><button id="q-ai">AI가 답하기</button>
+      <button class="sec" id="q-human">사람이 답하기</button></div>
+    <div id="q-answer"></div>` : '';
+  const endorse = (!n.is_query && !n.is_stub) ? `
+    <div class="row"><input id="end-amt" type="number" value="10" style="width:80px"/>
+      <button id="btn-endorse" class="sec">인도스(스테이크+배당)</button>
+      <span class="prov" id="end-out"></span></div>` : '';
+  c.innerHTML = `
+    <div class="node-head">
+      <h3>${esc(n.title)}</h3>
+      ${n.is_query?'<span class="badge query">열린 질의</span>':''}
+      ${n.frozen?'<span class="badge frozen">동결</span>':''}
+      <span class="badge">${esc(n.space)}</span>
+    </div>
+    <div class="prov">${prov} · 권위 ${n.authority} · 스테이크 ${n.staked}</div>
+    ${n.is_query ? '' : `<div class="answer">${renderText(n.answer)}</div>`}
+    ${queryAnswer}${endorse}
+    ${n.backlinks && n.backlinks.length ? `<div class="prov">백링크: ${
+      n.backlinks.map(b=>`<a class="wl" data-link="${esc(b.title)}">${esc(b.title)}</a>`).join(', ')
+    }</div>`:''}
+    <h2 class="sec">스레드 — 이 슬롯에 무엇이든 재귀로 붙습니다</h2>
+    ${actbar(n.id)}
+    <div class="reply" id="reply-${n.id}"></div>
+    ${threadHTML(n.thread || [])}`;
+  wireLinks(c);
+  c.querySelectorAll('button[data-act]').forEach(b =>
+    b.onclick = ()=> showReply(b.dataset.id, b.dataset.act));
+  if (n.is_query){
+    $('#q-ai').onclick = async ()=>{
+      await api('POST',`/api/queries/${encodeURIComponent(n.id)}/answer`,
+        {author:me(), ai:true, space:space()});
+      await refreshStat(); openNode(n.id);
+    };
+    $('#q-human').onclick = ()=> {
+      $('#q-answer').innerHTML =
+        `<textarea id="q-htext" rows="3" style="width:100%;margin-top:6px" placeholder="답변"></textarea>
+         <div class="row"><button id="q-hsave">답변 저장</button></div>`;
+      $('#q-hsave').onclick = async ()=>{
+        await api('POST',`/api/queries/${encodeURIComponent(n.id)}/answer`,
+          {author:me(), body:$('#q-htext').value, space:space()});
+        await refreshStat(); openNode(n.id);
+      };
+    };
+  }
+  if (!n.is_query && !n.is_stub){
+    $('#btn-endorse').onclick = async ()=>{
+      try{
+        const r = await api('POST','/api/endorse',
+          {account:me(), node_id:n.id, amount:Number($('#end-amt').value)});
+        $('#end-out').textContent = `잔액 ${r.balance} · 배당 ${JSON.stringify(r.payouts)}`;
+        loadLedger(); loadScores(); openNode(n.id);
+      }catch(e){ $('#end-out').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+    };
+  }
+}
+
+function showReply(id, act){
+  const box = $('#reply-'+id);
+  if (act === 'follow'){ submitContrib(id, 'follow', ''); return; }
+  const ph = {comment:'보강할 의견', fork:'정정 또는 다른 답', followup:'후속 질문'}[act];
+  box.innerHTML = `<textarea id="rt-${id}" placeholder="${ph}"></textarea>
+    <div class="row"><button data-go="${id}" data-act="${act}">보내기</button>
+      <button class="sec" data-cancel="${id}">취소</button></div>`;
+  box.querySelector('[data-go]').onclick = ()=>
+    submitContrib(id, act, $('#rt-'+id).value);
+  box.querySelector('[data-cancel]').onclick = ()=> box.innerHTML='';
+}
+
+async function submitContrib(id, kind, body){
+  try{
+    await api('POST',`/api/nodes/${encodeURIComponent(id)}/contribute`,
+      {kind, author:me(), body, space:space()});
+    await refreshStat(); loadScores();
+    openNode(current.id);  // re-render whole thread from the root in view
+  }catch(e){ alert(e.message); }
+}
+
+async function loadScores(){
+  const s = await api('GET',`/api/scores?space=${space()}`);
+  $('#top-nodes').innerHTML = s.top_nodes.length ? s.top_nodes.map(n =>
+    `<div class="sc"><span class="wl-row" data-id="${n.id}">${esc(n.title)}</span>
+       <span class="v">${n.authority}</span></div>`).join('')
+    : '<div class="prov">아직 없음</div>';
+  $('#top-nodes').querySelectorAll('[data-id]').forEach(e=>{
+    e.style.cursor='pointer'; e.onclick=()=>openNode(e.dataset.id);
+  });
+  $('#top-hubs').innerHTML = s.top_contributors.length ? s.top_contributors.map(u =>
+    `<div class="sc"><span>${esc(u.user)}</span><span class="v">${u.hub}</span></div>`).join('')
+    : '<div class="prov">아직 없음</div>';
+}
+
+async function loadLedger(){
+  const l = await api('GET','/api/ledger');
+  const bals = Object.entries(l.available).map(([k,v])=>`${esc(k)}: ${v}`).join(' · ');
+  $('#ledger').innerHTML = `잔액 — ${bals||'없음'}<br>소각 ${l.burned}`;
+}
+
+// -- wiring ------------------------------------------------------------------
+$('#btn-search').onclick = doSearch;
+$('#btn-ask').onclick = doAsk;
+$('#search').addEventListener('keydown', e=>{
+  if (e.key==='Enter' && !e.shiftKey){ e.preventDefault(); doSearch(); }
+});
+$('#new-query').onclick = ()=> {
+  const f = $('#query-form'); f.style.display = f.style.display==='none'?'block':'none';
+};
+$('#q-post').onclick = async ()=>{
+  const r = await api('POST','/api/queries',
+    {title:$('#q-title').value, detail:$('#q-detail').value, author:me(), space:space()});
+  $('#q-title').value=''; $('#q-detail').value=''; $('#query-form').style.display='none';
+  await refreshStat(); loadQueries(); renderNode(r);
+};
+$('#btn-mint').onclick = async ()=>{
+  await api('POST','/api/mint',{account:me(), amount:Number($('#mint-amt').value)});
+  loadLedger();
+};
+$('#add-space').onclick = ()=>{
+  const v = $('#space-new').value.trim(); if(!v) return;
+  if (![...$('#space').options].some(o=>o.value===v)){
+    const o = document.createElement('option'); o.value=o.textContent=v;
+    $('#space').appendChild(o);
+  }
+  $('#space').value = v; $('#space-new').value=''; reloadAll();
+};
+$('#space').onchange = reloadAll;
+
+function reloadAll(){ doSearch(); loadQueries(); loadScores(); loadLedger(); }
+(async function init(){
+  await refreshStat(); reloadAll();
+})();
+</script>
+</body>
+</html>
