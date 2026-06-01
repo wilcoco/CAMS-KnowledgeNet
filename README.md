@@ -37,7 +37,8 @@
 | **실행 로드맵** | [`docs/roadmap.md`](docs/roadmap.md) | 부트스트랩(첫 카토 온보딩) · MVP 우선순위 · 검증 닻 · 화폐공학 · 거버넌스 · 법무 |
 | **설계 비평/압박 테스트** | [`docs/critique.md`](docs/critique.md) | 화폐공학 균열 · 폰지 방어 · 거버넌스 급소 · 사상적 검토를 적대적으로 재검 |
 | **프로토타입 매핑** | [`docs/prototype.md`](docs/prototype.md) | 설계 개념 → 코드 1:1 대응표 |
-| **외부 레퍼런스** | [`docs/related/`](docs/related/) | Karpathy "LLM Wiki"(2026-04) 비교 — 같은 RAG 비판, 다른 답(수렴 vs 경합 보존) |
+| **아키텍처 3층** | [`docs/architecture-layers.md`](docs/architecture-layers.md) | 기판(Nostr) · 구조(지식그래프) · **시장(우리 고유)** — 외부 기술을 분류하는 정본 프레임 |
+| **외부 레퍼런스** | [`docs/related/`](docs/related/) | Karpathy "LLM Wiki" · 지식그래프 vs 검색(sanguinekim) · Nostr 기판 검증 |
 | **동작하는 MVP** | [`src/nightwish/`](src/nightwish/) | 온톨로지 트리 · 허브/권위 엔진 · 포인트 경제 · **검증 닻** · **거버넌스** · 질의 파이프라인 |
 | **동작하는 서비스(MVS)** | [`src/nightwish/wiki/`](src/nightwish/wiki/) · [`webapp/`](src/nightwish/webapp/) | **검증된 소셜 위키** — 카파시/옵시디안 위키 + 소셜 쉐어링 + 인증 투자. FastAPI + **JSON API** + **Postgres/SQLite 영속** + **실 LLM 북키핑**. 스코프: [`docs/service-mvs.md`](docs/service-mvs.md) · 배포: [`docs/deploy-railway.md`](docs/deploy-railway.md) |
 | **테스트** | [`tests/`](tests/) | 72개 단위 테스트 (불변식 검증) |
