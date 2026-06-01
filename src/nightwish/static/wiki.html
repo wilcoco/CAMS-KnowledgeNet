@@ -17,8 +17,12 @@
   header .stat { color:var(--mut); font-size:12px; }
   input, textarea { background:#0c0e13; color:var(--fg); border:1px solid var(--line);
     border-radius:6px; padding:7px 9px; font:inherit; }
-  .grid { display:grid; grid-template-columns: 240px 1fr 240px; gap:0;
+  .grid { display:grid; grid-template-columns: 320px 1fr 260px; gap:0;
           height:calc(100vh - 49px); }
+  #search { width:100%; min-height:84px; resize:vertical; line-height:1.5;
+            font-size:14px; }
+  #ask-row { display:flex; gap:6px; align-items:center; margin-top:6px; }
+  #ask-row button { padding:8px 14px; }
   @media (max-width: 860px){
     /* 좁은 화면(모바일): 3단을 위→아래로 쌓고 높이 고정 해제 */
     .grid { grid-template-columns: 1fr; height:auto; }
@@ -97,9 +101,13 @@
 <div class="grid">
   <!-- LEFT: search + list -->
   <aside>
-    <h2 class="sec">질문하기</h2>
-    <input id="search" placeholder="무엇이 궁금하세요? (질문/검색)" style="width:100%"
-           oninput="loadList()" onkeydown="if(event.key==='Enter')onAsk()" />
+    <h2 class="sec">🤖 AI에게 묻기</h2>
+    <textarea id="search" placeholder="무엇이든 물어보세요…  (Enter=보내기 · Shift+Enter=줄바꿈)&#10;먼저 기존 지식을 찾고, 없으면 AI가 답합니다"
+              oninput="loadList()" onkeydown="askKey(event)"></textarea>
+    <div id="ask-row">
+      <button style="flex:1" onclick="aiAnswer()">🤖 AI 답변</button>
+      <button class="sec" onclick="openQuery()">🙋 공개 질의</button>
+    </div>
     <div id="ask-actions"></div>
     <h2 class="sec">결과 / 문서</h2>
     <div id="list"></div>
@@ -256,17 +264,12 @@ async function loadList(){
   }
   // 질문 흐름: 검색어가 있으면 AI 답변 / 공개 질의로 이어갈 수 있게
   const act=$('ask-actions');
-  if(!q){ act.innerHTML=''; }
-  else {
-    act.innerHTML =
-      (ps.length===0 ? '<div class="q" style="color:var(--warn);margin:4px 0">검증된 답이 없습니다. ↓</div>' : '')
-      + `<div style="display:flex;gap:6px;margin-bottom:6px">
-           <button style="flex:1" onclick="aiAnswer()">✨ AI 답변</button>
-           <button class="sec" style="flex:1" onclick="openQuery()">🙋 공개 질의</button>
-         </div>`;
-  }
+  act.innerHTML = (q && ps.length===0)
+    ? '<div class="q" style="color:var(--warn);margin:4px 0">검증된 답이 없습니다 — 위 [🤖 AI 답변]을 누르세요</div>'
+    : '';
 }
 function onAsk(){ loadList(); }
+function askKey(e){ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); onAsk(); } }
 async function loadQueries(){
   const qs=await api('/queries'); const box=$('queries');
   box.innerHTML = qs.length ? '' : '<small class="hint">열린 질의 없음</small>';
