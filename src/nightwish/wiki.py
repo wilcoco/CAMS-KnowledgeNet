@@ -56,6 +56,21 @@ def extract_links(body: str) -> list[str]:
     return list(seen)
 
 
+_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
+
+
+def _tokens(text: str) -> set[str]:
+    return set(_TOKEN_RE.findall(text.lower()))
+
+
+def _ngrams(text: str, n: int = 2) -> set[str]:
+    """Character n-grams (whitespace stripped) — order-free, CJK-friendly."""
+    s = re.sub(r"\s+", "", text.lower())
+    if len(s) < n:
+        return {s} if s else set()
+    return {s[i : i + n] for i in range(len(s) - n + 1)}
+
+
 @dataclass
 class Page:
     slug: str
@@ -197,14 +212,34 @@ class Wiki:
     def list_pages(self) -> list[Page]:
         return sorted(self.pages.values(), key=lambda p: -p.updated_at)
 
-    def search(self, query: str) -> list[Page]:
-        q = query.strip().lower()
+    def search(self, query: str, limit: int = 50) -> list[Page]:
+        """Ranked lexical search (token overlap + char n-gram + phrase boost).
+
+        Order-free and CJK-friendly — "무도장 하이그로시" matches a page titled
+        "사출 하이그로시 무도장" even though that exact phrase never appears.
+        (Synonyms/paraphrase still need vector search — a later step.)
+        """
+        q = query.strip()
         if not q:
             return self.list_pages()
-        return [
-            p for p in self.list_pages()
-            if q in p.title.lower() or q in p.body.lower()
-        ]
+        ql = q.lower()
+        q_tok, q_ng = _tokens(q), _ngrams(q)
+        scored: list[tuple[float, Page]] = []
+        for p in self.pages.values():
+            t_tok, b_tok = _tokens(p.title), _tokens(p.body)
+            t_ng, b_ng = _ngrams(p.title), _ngrams(p.body)
+            score = 3.0 * len(q_tok & t_tok) + 1.0 * len(q_tok & b_tok)
+            if q_ng:
+                score += 2.0 * len(q_ng & t_ng) / len(q_ng)
+                score += 1.0 * len(q_ng & b_ng) / len(q_ng)
+            if ql in p.title.lower():
+                score += 5.0
+            elif ql in p.body.lower():
+                score += 2.0
+            if score > 0:
+                scored.append((score, p))
+        scored.sort(key=lambda sp: (-sp[0], -sp[1].updated_at))
+        return [p for _s, p in scored[:limit]]
 
     # -- scores ---------------------------------------------------------------
     def authority_of(self, slug: str) -> float:

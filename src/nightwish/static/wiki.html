@@ -128,7 +128,11 @@
     <div id="pt-msg" class="msg"></div>
 
     <h2 class="sec">🧩 이 문서의 의미망 (온톨로지)</h2>
-    <small class="hint">중심=현재 문서, 주변=연결된 문서. 클릭하면 이동</small>
+    <div style="display:flex;gap:6px;margin:2px 0 6px">
+      <button class="sec" style="flex:1" onclick="miniMode('links')">연결망</button>
+      <button class="sec" style="flex:1" onclick="miniMode('ai')">🧩 의미관계(AI)</button>
+    </div>
+    <small class="hint">연결망=문서 링크 / 의미관계=AI가 뽑은 개체-관계</small>
     <canvas id="mini"></canvas>
 
     <h2 class="sec">백링크 (이 문서를 가리킴)</h2>
@@ -413,6 +417,36 @@ async function loadMini(slug){
   cv.onclick=(ev)=>{ const rct=cv.getBoundingClientRect(), mx=ev.clientX-rct.left, my=ev.clientY-rct.top;
     let hit=null,best=300; for(const n of miniNodes){ const d=(n.x-mx)**2+(n.y-my)**2; if(d<best){best=d;hit=n;} }
     if(hit&&hit.slug!==slug) open(hit.slug); };
+}
+
+// ---- AI 시멘틱 관계 그래프 ----
+function miniMode(m){ if(!current) return; if(m==='ai') loadRelations(current); else loadMini(current); }
+async function loadRelations(slug){
+  const cv=$('mini'), ctx=cv.getContext('2d'); cv.width=cv.clientWidth||220; cv.height=200;
+  ctx.clearRect(0,0,cv.width,cv.height); ctx.fillStyle='var(--acc)'; ctx.fillStyle='#7aa2ff';
+  ctx.font='12px system-ui'; ctx.fillText('🧩 관계 추출 중…', 10, 24);
+  try{ const r=await api('/extract','POST',{slug}); drawRelations(r.relations, r.source); }
+  catch(e){ ctx.clearRect(0,0,cv.width,cv.height); ctx.fillStyle='#ff7a7a'; ctx.fillText(e.message,10,24); }
+}
+function drawRelations(triples, source){
+  const cv=$('mini'), W=cv.width=cv.clientWidth||220, H=cv.height=200, ctx=cv.getContext('2d');
+  ctx.clearRect(0,0,W,H);
+  if(!triples || !triples.length){ ctx.fillStyle='#9aa3b2'; ctx.font='12px system-ui';
+    ctx.fillText('추출된 관계 없음', 10, 24); return; }
+  const names=[...new Set(triples.flatMap(t=>[t.subject,t.object]))].slice(0,12);
+  const idx={}; names.forEach((n,i)=>idx[n]=i);
+  const cx=W/2, cy=H/2, R=Math.min(W,H)/2-28;
+  const pos=names.map((n,i)=>{ const a=i/names.length*2*Math.PI-Math.PI/2;
+    return {n, x:cx+Math.cos(a)*R, y:cy+Math.sin(a)*R}; });
+  ctx.lineWidth=1;
+  triples.forEach(t=>{ const a=pos[idx[t.subject]], b=pos[idx[t.object]]; if(!a||!b) return;
+    ctx.strokeStyle='#4a5263'; ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+    ctx.fillStyle='#ffcf6b'; ctx.font='9px system-ui';
+    ctx.fillText((t.predicate||'').slice(0,8),(a.x+b.x)/2,(a.y+b.y)/2-1); });
+  pos.forEach(p=>{ ctx.beginPath(); ctx.arc(p.x,p.y,5,0,7); ctx.fillStyle='#7aa2ff'; ctx.fill();
+    ctx.fillStyle='#cfd6e4'; ctx.font='10px system-ui'; ctx.fillText((p.n||'').slice(0,9),p.x+7,p.y+3); });
+  if(source==='links'){ ctx.fillStyle='#9aa3b2'; ctx.font='9px system-ui';
+    ctx.fillText('(링크 기반 · AI 켜면 의미관계)', 6, H-6); }
 }
 
 async function aiDraft(){

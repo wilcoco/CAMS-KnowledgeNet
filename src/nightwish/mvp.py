@@ -62,6 +62,8 @@ def offline_draft(title: str, prompt: str) -> str:
 
 
 _ai_fn: Callable[[str, str], str] = offline_draft
+#: relation extractor (title, body) -> list[triple]; None until LLM configured
+_relations_fn: Optional[Callable[[str, str], list]] = None
 
 
 def set_ai(fn: Callable[[str, str], str]) -> None:
@@ -71,14 +73,15 @@ def set_ai(fn: Callable[[str, str], str]) -> None:
 
 
 def configure_ai() -> bool:
-    """Activate the Claude-backed draft fn if enabled+available. Returns success."""
-    from nightwish.llm import make_draft_fn
+    """Activate Claude-backed draft + relation extraction if enabled. Returns success."""
+    global _relations_fn
+    from nightwish.llm import make_draft_fn, make_relation_fn
 
-    fn = make_draft_fn()
-    if fn is not None:
-        set_ai(fn)
-        return True
-    return False
+    draft = make_draft_fn()
+    if draft is not None:
+        set_ai(draft)
+    _relations_fn = make_relation_fn()
+    return draft is not None
 
 
 # --------------------------------------------------------------------------- #
@@ -117,6 +120,8 @@ class WikiService:
         self.db_path = db_path
         self._lock = threading.RLock()
         self.wiki, self.econ = _load_state(db_path, hub_mode)
+        #: slug -> (updated_at, relations) cache for /api/extract (not persisted)
+        self._relcache: dict[str, tuple[int, list]] = {}
 
     def save(self) -> None:
         _save_state(self.db_path, self.wiki, self.econ)
@@ -179,6 +184,10 @@ class AnswerBody(BaseModel):
     body: str = Field(min_length=1)
     author: str = Field(min_length=1)
     title: str = ""
+
+
+class ExtractBody(BaseModel):
+    slug: str = Field(min_length=1)
 
 
 def _page_view(svc: WikiService, slug: str, *, full: bool = False) -> dict:
@@ -341,6 +350,40 @@ def create_app() -> FastAPI:
             p = svc.wiki.get(slug)
             return {"title": title, "slug": slug,
                     "exists": p is not None and not p.is_stub}
+
+    @app.post("/api/extract")
+    def extract(body: ExtractBody):
+        """Extract (subject, predicate, object) relations from a page.
+
+        Uses the LLM when enabled; otherwise falls back to the page's wikilinks
+        as ``A —관련→ B`` triples. Cached per page until its body changes.
+        """
+        svc = get_service()
+        with svc._lock:
+            page = svc.wiki.get(body.slug)
+            if page is None or page.is_stub:
+                raise HTTPException(404, f"page {body.slug!r} not found or empty")
+            cached = svc._relcache.get(page.slug)
+            if cached and cached[0] == page.updated_at:
+                return {"relations": cached[1], "source": "cache"}
+            rels = None
+            if _relations_fn is not None:
+                try:
+                    rels = _relations_fn(page.title, page.body)
+                except Exception:
+                    rels = None
+            source = "ai"
+            if rels is None:
+                # offline fallback: derive relations from wikilinks
+                source = "links"
+                rels = [
+                    {"subject": page.title, "predicate": "관련",
+                     "object": svc.wiki.pages[t].title}
+                    for t in page.links
+                    if t in svc.wiki.pages and not svc.wiki.pages[t].is_query
+                ]
+            svc._relcache[page.slug] = (page.updated_at, rels)
+            return {"relations": rels, "source": source}
 
     @app.get("/api/graph")
     def graph():

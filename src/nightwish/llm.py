@@ -58,14 +58,79 @@ def claude_draft(title: str, prompt: str, *, model: str = DEFAULT_MODEL) -> str:
     return "".join(b.text for b in final.content if b.type == "text").strip()
 
 
+RELATION_SYSTEM = (
+    "당신은 업무지식 문서에서 **개념 간 관계**를 추출하는 온톨로지 추출기입니다. "
+    "문서에서 핵심 개체(개념·재료·공정·현상 등)와 그 사이의 관계를 "
+    "(주어, 술어, 목적어) 트리플로 뽑으세요.\n"
+    "- 술어는 짧은 한국어 동사/관계어 (예: 영향, 필요, 원인, 포함, 대체, 방지).\n"
+    "- 문서에 실제로 드러난 관계만. 최대 12개. 추측 금지.\n"
+    "- 반드시 주어진 JSON 스키마로만 답하세요."
+)
+
+_RELATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "relations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "subject": {"type": "string"},
+                    "predicate": {"type": "string"},
+                    "object": {"type": "string"},
+                },
+                "required": ["subject", "predicate", "object"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["relations"],
+    "additionalProperties": False,
+}
+
+
+def claude_relations(title: str, body: str, *, model: str = DEFAULT_MODEL) -> list[dict]:
+    """Extract (subject, predicate, object) triples from a page with Claude."""
+    import json
+
+    import anthropic
+
+    client = anthropic.Anthropic()
+    user = f"제목: {title}\n\n본문:\n{body}\n\n개념 간 관계 트리플을 추출해줘."
+    msg = client.messages.create(
+        model=model,
+        max_tokens=1024,
+        system=[
+            {"type": "text", "text": RELATION_SYSTEM,
+             "cache_control": {"type": "ephemeral"}}
+        ],
+        messages=[{"role": "user", "content": user}],
+        output_config={"format": {"type": "json_schema", "schema": _RELATION_SCHEMA}},
+    )
+    text = next((b.text for b in msg.content if b.type == "text"), "{}")
+    try:
+        return json.loads(text).get("relations", [])
+    except Exception:
+        return []
+
+
 def make_draft_fn() -> Optional[Callable[[str, str], str]]:
     """Return the Claude-backed draft fn if enabled+available, else ``None``."""
+    return claude_draft if _llm_ready() else None
+
+
+def make_relation_fn() -> Optional[Callable[[str, str], list]]:
+    """Return the Claude-backed relation extractor if enabled+available, else None."""
+    return claude_relations if _llm_ready() else None
+
+
+def _llm_ready() -> bool:
     if os.environ.get("NIGHTWISH_ENABLE_LLM", "").lower() not in ("1", "true", "yes"):
-        return None
+        return False
     if not os.environ.get("ANTHROPIC_API_KEY"):
-        return None
+        return False
     try:
         import anthropic  # noqa: F401
     except Exception:
-        return None
-    return claude_draft
+        return False
+    return True
