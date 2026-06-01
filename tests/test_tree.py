@@ -23,6 +23,25 @@ def test_follow_is_not_value_add():
     assert t.nodes["q1-f"].value_add is False
 
 
+def test_follow_references_parent_without_copying_content():
+    t = make_tree()  # q1: "Q?" / "AI answer"
+    f = t.follow("q1-f", "q1", "bob", stake=5.0)
+    # 복사하지 않는다 — 자기 내용은 비어 있고 parent_id로 참조만
+    assert f.question == "" and f.answer == ""
+    assert f.parent_id == "q1"
+    # 표시용으로는 체인을 거슬러 해소
+    assert t.resolved_question("q1-f") == "Q?"
+    assert t.resolved_answer("q1-f") == "AI answer"
+
+
+def test_contribute_does_not_inherit_parent_question():
+    t = make_tree()
+    c = t.contribute("c1", "q1", "carol", "extra context", stake=1.0)
+    assert c.question == ""                      # 부모 질문을 복사하지 않음
+    assert c.answer == "extra context"           # 자기 기여 내용은 보관
+    assert t.resolved_question("c1") == "Q?"     # 체인으로 해소
+
+
 def test_large_stake_without_contribution_is_rejected():
     """Point size == contribution size: money alone cannot buy a large weight."""
     t = make_tree()

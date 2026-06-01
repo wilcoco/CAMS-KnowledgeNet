@@ -73,7 +73,9 @@ class QueryPipeline:
         # ① cheap search of the existing human ontology
         hit = self.search_fn(question, self.tree)
         if hit is not None:
-            return QueryResult(question, Stage.SEARCH, self.tree.nodes[hit].answer, hit)
+            return QueryResult(
+                question, Stage.SEARCH, self.tree.resolved_answer(hit), hit
+            )
 
         # ② ask the AI; the first Q&A becomes a node
         ai_answer = self.ask_ai_fn(question)

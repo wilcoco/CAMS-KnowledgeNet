@@ -23,6 +23,11 @@ weight. A stake above :data:`OntologyTree.large_stake_threshold` requires an
 accompanying contribution (``value_add``). This single rule blocks plutocracy,
 beauty-contest voting, and noise-forks at once.
 
+Nodes **reference, never copy**: a follow/contribute/fork stores only its *own*
+content and points at its parent (``parent_id``). The thread's shared question
+(and, for a pure follow, the agreed answer) is reconstructed on demand by walking
+the chain — :meth:`OntologyTree.resolved_question` / :meth:`resolved_answer`.
+
 Branches are never deleted: a branch with no follow-ups goes **DORMANT** and can
 be **revived** later (the Galileo problem — truth's time-asymmetry is preserved;
 the tree refuses to converge to a single frozen answer).
@@ -143,10 +148,13 @@ class OntologyTree:
         """
         parent = self._require(parent_id)
         self._check_stake_rule(stake, value_add=False)
+        # A follow adds no new content — it only references the branch it extends
+        # (parent_id) and stakes on it. The question/answer are *not* copied;
+        # display resolves them up the chain via :meth:`resolved_answer`.
         node = Node(
             id=node_id,
-            question=parent.question,
-            answer=parent.answer,
+            question="",
+            answer="",
             author=follower,
             action=Action.FOLLOW,
             parent_id=parent_id,
@@ -175,9 +183,11 @@ class OntologyTree:
         """추가 기여 — add context / rebuttal / link / ontology as a new node."""
         parent = self._require(parent_id)
         self._check_stake_rule(stake, value_add)
+        # The contribution stores only its *own* content. The thread's question
+        # is referenced, not copied — :meth:`resolved_question` walks the chain.
         node = Node(
             id=node_id,
-            question=question or parent.question,
+            question=question or "",
             answer=answer,
             author=author,
             action=Action.CONTRIBUTE,
@@ -208,9 +218,11 @@ class OntologyTree:
         for it to win — there is no judge.
         """
         parent = self._require(parent_id)
+        # A fork answers the *same* (shared) question with its own answer; that
+        # question is referenced via the chain, not copied onto the fork.
         node = Node(
             id=node_id,
-            question=question or parent.question,
+            question=question or "",
             answer=answer,
             author=author,
             action=Action.FORK,
@@ -233,7 +245,7 @@ class OntologyTree:
         parent = self._require(parent_id)
         node = Node(
             id=node_id,
-            question=parent.question,
+            question="",
             answer=lead,
             author=author,
             action=Action.POINTER,
@@ -295,6 +307,37 @@ class OntologyTree:
             chain.append(parent)
             cur = parent.parent_id
         return chain
+
+    def resolved_question(self, node_id: str) -> str:
+        """The thread question for ``node_id`` — its own, else inherited by chain.
+
+        Nodes reference rather than copy the question, so a follow/contribute/
+        fork without its own question resolves to the nearest ancestor that has
+        one (ultimately the root).
+        """
+        node = self._require(node_id)
+        if node.question:
+            return node.question
+        for ancestor in self.ancestors(node_id):
+            if ancestor.question:
+                return ancestor.question
+        return ""
+
+    def resolved_answer(self, node_id: str) -> str:
+        """The answer to show for ``node_id`` — its own, else referenced by chain.
+
+        A pure FOLLOW carries no new answer; it agrees with the branch it
+        extends, so its answer resolves to the nearest ancestor that has one.
+        Other node kinds always carry their own answer.
+        """
+        node = self._require(node_id)
+        if node.answer:
+            return node.answer
+        if node.action is Action.FOLLOW:
+            for ancestor in self.ancestors(node_id):
+                if ancestor.answer:
+                    return ancestor.answer
+        return node.answer
 
     def children_of(self, node_id: str) -> list[Node]:
         return [self.nodes[c] for c in self._require(node_id).children]
