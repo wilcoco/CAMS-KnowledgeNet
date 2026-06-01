@@ -61,6 +61,22 @@ def test_group_contribution_on_public_node_is_one_way(client):
     assert len(acme["contributions"]) == 1
 
 
+def test_public_contribution_does_not_follow_into_group(client):
+    p = client.post("/api/pages",
+                    json={"title": "공유답", "body": "내용", "author": "u", "space": "public"}).json()
+    # 같은 공용 노드에 공용 댓글 + 그룹(acme) 댓글이 각각 달린다
+    client.post(f"/api/pages/{p['slug']}/contribute",
+                json={"kind": "comment", "author": "pub-user", "body": "공개 메모", "space": "public"})
+    client.post(f"/api/pages/{p['slug']}/contribute",
+                json={"kind": "comment", "author": "acme-user", "body": "사내 메모", "space": "acme"})
+    pub = client.get(f"/api/pages/{p['slug']}", params={"space": "public"}).json()
+    acme = client.get(f"/api/pages/{p['slug']}", params={"space": "acme"}).json()
+    # 공용 뷰: 공용 기여만
+    assert [c["body"] for c in pub["contributions"]] == ["공개 메모"]
+    # 그룹 뷰: 자기 층 기여만 — 공용(원래) 스레드는 따라오지 않는다
+    assert [c["body"] for c in acme["contributions"]] == ["사내 메모"]
+
+
 def test_ai_answer_into_group_stays_in_group(client):
     a = client.post("/api/ai-answer", json={"question": "사내 공정?", "author": "u", "space": "acme"}).json()
     assert a["space"] == "acme"

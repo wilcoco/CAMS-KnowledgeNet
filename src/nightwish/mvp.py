@@ -234,10 +234,14 @@ def _page_view(svc: WikiService, slug: str, *, full: bool = False,
     }
     if full:
         view["body"] = p.body
-        # contributions are layered too: show public ∪ the viewer's space
+        # Contributions do NOT compose across layers: a viewer sees only the
+        # thread of their *own* layer. A group overlay shows its own notes; the
+        # public (original) thread does not follow down into the group. (Public
+        # pages themselves remain a shared commons — only the contribution
+        # thread is layer-private.)
         view["contributions"] = [
             c for c in p.contributions
-            if c.get("space", "public") in ("public", space)
+            if c.get("space", "public") == space
         ]
         view["backlinks"] = [
             {"slug": b.slug, "title": b.title, "author": b.author}
