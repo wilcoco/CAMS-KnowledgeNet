@@ -67,10 +67,31 @@ python examples/dividend_demo.py  # 부가가치-게이트 배당 라우팅 데�
 python examples/verified_wheel.py # [P0] 검증 닻이 배당을 여는 첫 바퀴
 
 pip install -e ".[dev]"           # + pytest, httpx
-python -m pytest -q               # 56개 테스트
+python -m pytest -q               # 68개 테스트
 ```
 
-### 서비스 실행 (HTTP API + 웹 UI)
+### ⭐ MVP — 공유 LLM 위키 (Obsidian + LLM, 사용자 간 공유)
+
+설계 §2.3의 **제3극(소유 O + 연결 O)** 을 가장 가볍게 구현한 제품. 마크다운 페이지를
+`[[위키링크]]` 로 잇고, LLM이 초안을 거들고, **누가 먼저 좋은 문서를 알아보고 링크했나
+(허브/권위 = 특허 10-0913256)** 가 랭킹으로 드러난다.
+
+```bash
+pip install -e ".[service]"
+nightwish-mvp                     # 또는: uvicorn nightwish.mvp:app
+# → http://127.0.0.1:8000/  에서 페이지 작성·[[링크]]·AI 초안·인기문서/안목기여자 랭킹
+```
+
+- 상태는 `$NIGHTWISH_WIKI_DB`(기본 `data/wiki.json`) 스냅샷에 영속화.
+- LLM 초안은 교체 가능: 기본 오프라인 스텁, 실모델은 `nightwish.mvp.set_ai(fn)` 주입.
+- 엔드포인트: `GET/POST /api/pages`, `/api/search`, `/api/draft`, `/api/scores`, `/api/resolve/{title}`.
+
+**Railway 배포:** 이 저장소를 Railway에 연결하면 [`nixpacks.toml`](nixpacks.toml)/[`Procfile`](Procfile)
+이 `0.0.0.0:$PORT`로 `nightwish.mvp:app`을 띄운다. **브랜치별로 서비스를 따로 두면** 각
+브랜치가 독립 배포·독립 URL을 가진다. 상태 유지는 Railway Volume을 마운트하고
+`NIGHTWISH_WIKI_DB=/data/wiki.json` 로 지정.
+
+### 서비스 실행 (온톨로지 엔진 데모 — HTTP API + 웹 UI)
 
 ```bash
 pip install -e ".[service]"       # + fastapi, uvicorn, pydantic

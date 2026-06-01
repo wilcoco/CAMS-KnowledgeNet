@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Nightwish Wiki — 공유 지식 위키</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#2a2f3a; --fg:#e6e8ee;
+          --mut:#9aa3b2; --acc:#7aa2ff; --good:#5ad19a; --warn:#ffcf6b;
+          --link:#8ab4ff; --stub:#c98a8a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.6 system-ui,"Apple SD Gothic Neo",sans-serif; }
+  header { padding:10px 16px; border-bottom:1px solid var(--line); display:flex;
+           gap:12px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; }
+  header .stat { color:var(--mut); font-size:12px; }
+  input, textarea { background:#0c0e13; color:var(--fg); border:1px solid var(--line);
+    border-radius:6px; padding:7px 9px; font:inherit; }
+  .grid { display:grid; grid-template-columns: 240px 1fr 240px; gap:0;
+          height:calc(100vh - 49px); }
+  aside, .center { overflow:auto; padding:12px; }
+  aside { border-right:1px solid var(--line); }
+  aside.right { border-right:0; border-left:1px solid var(--line); }
+  h2.sec { font-size:11px; color:var(--acc); text-transform:uppercase;
+           letter-spacing:.5px; margin:14px 0 6px; }
+  button { background:var(--acc); color:#0a0c10; border:0; border-radius:6px;
+           padding:7px 11px; font-weight:600; cursor:pointer; }
+  button.sec { background:#252a35; color:var(--fg); }
+  button.link { background:none; color:var(--link); padding:2px 0; font-weight:400;
+                cursor:pointer; text-align:left; }
+  .pitem { padding:5px 7px; border-radius:6px; cursor:pointer; font-size:13px; }
+  .pitem:hover { background:#1b2030; }
+  .pitem.stub { color:var(--stub); font-style:italic; }
+  .pitem .a { color:var(--mut); font-size:11px; }
+  .center h1.title { margin:4px 0 2px; font-size:24px; }
+  .center .byline { color:var(--mut); font-size:12px; margin-bottom:12px; }
+  .toolbar { display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+  #editor { width:100%; min-height:340px; resize:vertical; line-height:1.6; }
+  .view a.wl { color:var(--link); cursor:pointer; text-decoration:none;
+               border-bottom:1px dotted var(--link); }
+  .view a.wl.stub { color:var(--stub); border-bottom-color:var(--stub); }
+  .view h1,.view h2,.view h3 { margin:14px 0 6px; }
+  .view blockquote { border-left:3px solid var(--line); margin:8px 0; padding:2px 12px;
+                     color:var(--mut); }
+  .view ul { margin:6px 0; padding-left:20px; }
+  .rank { font-size:12px; }
+  .rank .n { color:var(--mut); }
+  .bl { font-size:12px; }
+  .msg { font-size:12px; color:var(--good); min-height:16px; }
+  .msg.err { color:#ff7a7a; }
+  small.hint { color:var(--mut); font-size:11px; }
+  .badge { font-size:10px; padding:1px 6px; border-radius:10px; background:#252a35; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📚 Nightwish Wiki</h1>
+  <span class="stat">페이지 <b id="s-pages">0</b></span>
+  <span class="stat">모드 <b id="s-mode">…</b></span>
+  <span style="margin-left:auto"></span>
+  <span class="stat">나:</span>
+  <input id="who" value="Json" style="width:130px" placeholder="내 이름" />
+</header>
+
+<div class="grid">
+  <!-- LEFT: search + list -->
+  <aside>
+    <input id="search" placeholder="🔍 검색" style="width:100%" oninput="loadList()" />
+    <button style="width:100%;margin-top:8px" onclick="newPage()">+ 새 페이지</button>
+    <h2 class="sec">페이지</h2>
+    <div id="list"></div>
+  </aside>
+
+  <!-- CENTER: page view / editor -->
+  <section class="center">
+    <div id="empty" style="color:var(--mut);margin-top:40px;text-align:center">
+      왼쪽에서 페이지를 고르거나, <b>+ 새 페이지</b>로 시작하세요.<br>
+      <small class="hint">본문에 <code>[[다른 제목]]</code> 을 쓰면 문서끼리 연결됩니다.</small>
+    </div>
+    <div id="page" style="display:none">
+      <h1 class="title" id="p-title"></h1>
+      <div class="byline" id="p-by"></div>
+      <div class="toolbar">
+        <button id="btn-edit" onclick="edit()">편집</button>
+        <button id="btn-save" class="sec" style="display:none" onclick="save()">저장</button>
+        <button class="sec" onclick="aiDraft()">✨ AI 초안</button>
+        <span class="msg" id="msg"></span>
+      </div>
+      <div id="view" class="view"></div>
+      <textarea id="editor" style="display:none"></textarea>
+    </div>
+  </section>
+
+  <!-- RIGHT: backlinks + rankings -->
+  <aside class="right">
+    <h2 class="sec">백링크 (이 문서를 가리킴)</h2>
+    <div id="backlinks" class="bl"><small class="hint">없음</small></div>
+    <h2 class="sec">🏆 인기 문서 (권위)</h2>
+    <div id="toppages" class="rank"></div>
+    <h2 class="sec">👁 안목 기여자 (허브)</h2>
+    <small class="hint">먼저 좋은 문서를 알아보고 링크한 사람</small>
+    <div id="topusers" class="rank"></div>
+  </aside>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const who = () => $('who').value.trim() || 'anon';
+let current = null;       // current slug
+let editing = false;
+
+async function api(path, method='GET', body=null){
+  const opt={method,headers:{'Content-Type':'application/json'}};
+  if(body) opt.body=JSON.stringify(body);
+  const r=await fetch('/api'+path,opt);
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(d.detail||r.statusText);
+  return d;
+}
+function esc(s){return (s??'').toString().replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function msg(t,e=false){$('msg').textContent=t;$('msg').className='msg'+(e?' err':'');}
+
+// ---- tiny markdown renderer (headings, bold, lists, quote, [[links]]) ----
+function render(md){
+  const lines = md.split('\n'); let html=''; let inList=false;
+  const wl = s => s.replace(/\[\[([^\[\]]+)\]\]/g, (m,t)=>{
+    const slug = t.trim().toLowerCase().replace(/[\/\\]/g,'-').replace(/\s+/g,'-');
+    return `<a class="wl" data-slug="${esc(slug)}" data-title="${esc(t.trim())}" onclick="openByLink(this)">${esc(t.trim())}</a>`;
+  });
+  const inline = s => wl(esc(s)).replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
+  for(let ln of lines){
+    if(/^\s*-\s+/.test(ln)){ if(!inList){html+='<ul>';inList=true;} html+='<li>'+inline(ln.replace(/^\s*-\s+/,''))+'</li>'; continue; }
+    if(inList){html+='</ul>';inList=false;}
+    if(/^###\s+/.test(ln)) html+='<h3>'+inline(ln.replace(/^###\s+/,''))+'</h3>';
+    else if(/^##\s+/.test(ln)) html+='<h2>'+inline(ln.replace(/^##\s+/,''))+'</h2>';
+    else if(/^#\s+/.test(ln)) html+='<h1>'+inline(ln.replace(/^#\s+/,''))+'</h1>';
+    else if(/^>\s?/.test(ln)) html+='<blockquote>'+inline(ln.replace(/^>\s?/,''))+'</blockquote>';
+    else if(ln.trim()==='') html+='<br>';
+    else html+='<p>'+inline(ln)+'</p>';
+  }
+  if(inList) html+='</ul>';
+  return html;
+}
+
+async function refresh(){ await Promise.all([loadList(), loadScores(), loadState()]); }
+async function loadState(){ const s=await api('/state'); $('s-pages').textContent=s.page_count; $('s-mode').textContent=s.hub_mode; }
+async function loadList(){
+  const q=$('search').value.trim();
+  const ps=await api('/search?q='+encodeURIComponent(q));
+  const box=$('list'); box.innerHTML='';
+  ps.forEach(p=>{
+    const d=document.createElement('div');
+    d.className='pitem'+(p.is_stub?' stub':'');
+    d.onclick=()=>open(p.slug);
+    d.innerHTML=`${esc(p.title)} ${p.is_stub?'<span class="badge">stub</span>':''}
+      <div class="a">by ${esc(p.author)} · 권위 ${p.authority}</div>`;
+    box.appendChild(d);
+  });
+}
+async function loadScores(){
+  const s=await api('/scores');
+  $('toppages').innerHTML = s.top_pages.map((p,i)=>
+    `<div><span class="n">${i+1}.</span> <button class="link" onclick="open('${p.slug}')">${esc(p.title)}</button> <span class="n">${p.authority}</span></div>`).join('') || '<small class="hint">아직 없음</small>';
+  $('topusers').innerHTML = s.top_contributors.map((u,i)=>
+    `<div><span class="n">${i+1}.</span> ${esc(u.user)} <span class="n">hub ${u.hub}</span></div>`).join('') || '<small class="hint">아직 없음</small>';
+}
+
+async function open(slug){
+  try{
+    const p=await api('/pages/'+slug);
+    current=slug; editing=false;
+    $('empty').style.display='none'; $('page').style.display='block';
+    $('p-title').textContent=p.title;
+    $('p-by').innerHTML = p.is_stub ? '<span style="color:var(--stub)">빈 문서(stub) — 편집해서 채우세요</span>'
+      : `작성 ${esc(p.author)}${p.last_editor&&p.last_editor!==p.author?' · 편집 '+esc(p.last_editor):''} · 권위 ${p.authority}`;
+    $('view').innerHTML = p.body.trim()? render(p.body) : '<small class="hint">내용이 없습니다. 편집을 눌러 작성하세요.</small>';
+    $('editor').value = p.body;
+    showView();
+    $('backlinks').innerHTML = p.backlinks.length
+      ? p.backlinks.map(b=>`<div><button class="link" onclick="open('${b.slug}')">${esc(b.title)}</button> <span class="n">by ${esc(b.author)}</span></div>`).join('')
+      : '<small class="hint">없음</small>';
+    msg('');
+  }catch(e){ msg(e.message,true); }
+}
+function openByLink(el){
+  const slug=el.getAttribute('data-slug'), title=el.getAttribute('data-title');
+  // open existing; if it doesn't exist yet, start a new page with that title
+  api('/pages/'+slug).then(()=>open(slug)).catch(()=>newPage(title));
+}
+
+function showView(){ editing=false; $('view').style.display='block'; $('editor').style.display='none';
+  $('btn-edit').style.display='inline-block'; $('btn-save').style.display='none'; }
+function showEdit(){ editing=true; $('view').style.display='none'; $('editor').style.display='block';
+  $('btn-edit').style.display='none'; $('btn-save').style.display='inline-block'; $('editor').focus(); }
+function edit(){ showEdit(); }
+
+function newPage(title){
+  current=null; editing=true;
+  const t = title || prompt('새 페이지 제목:');
+  if(!t) return;
+  $('empty').style.display='none'; $('page').style.display='block';
+  $('p-title').textContent=t; $('p-by').textContent='새 문서';
+  $('editor').value = `# ${t}\n\n`;
+  $('p-title').dataset.newtitle = t;
+  showEdit();
+}
+
+async function save(){
+  const title = current ? $('p-title').textContent : $('p-title').dataset.newtitle;
+  try{
+    const p=await api('/pages','POST',{title, body:$('editor').value, author:who()});
+    await refresh(); await open(p.slug);
+    msg('저장됨 ✓');
+  }catch(e){ msg(e.message,true); }
+}
+async function aiDraft(){
+  const title = current ? $('p-title').textContent : ($('p-title').dataset.newtitle||$('p-title').textContent);
+  const prompt_ = prompt('AI에게 요청 (무엇을 적을까요?):','')||'';
+  try{
+    const d=await api('/draft','POST',{title, prompt:prompt_});
+    if(!editing) showEdit();
+    $('editor').value = d.body;
+    msg('AI 초안을 넣었습니다. 다듬고 저장하세요.');
+  }catch(e){ msg(e.message,true); }
+}
+refresh();
+</script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+# Railway / Nixpacks build config for the MVP wiki service.
+# Installs the package with its service extras (fastapi/uvicorn/pydantic),
+# then binds uvicorn to 0.0.0.0:$PORT (Railway injects $PORT).
+
+[phases.setup]
+nixPkgs = ["python311"]
+
+[phases.install]
+cmds = ["pip install --upgrade pip", "pip install -e '.[service]'"]
+
+[start]
+cmd = "python -m uvicorn nightwish.mvp:app --host 0.0.0.0 --port $PORT"
