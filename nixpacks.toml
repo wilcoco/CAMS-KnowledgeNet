@@ -12,7 +12,7 @@ nixPkgs = ["python311"]
 cmds = [
   "python3 -m venv --copies /opt/venv",
   "/opt/venv/bin/pip install --upgrade pip setuptools wheel",
-  "/opt/venv/bin/pip install fastapi 'uvicorn[standard]' pydantic anthropic",
+  "/opt/venv/bin/pip install fastapi 'uvicorn[standard]' pydantic anthropic 'psycopg[binary]'",
 ]
 
 [phases.build]

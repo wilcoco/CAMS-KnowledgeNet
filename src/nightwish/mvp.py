@@ -90,24 +90,40 @@ def configure_ai() -> bool:
 # --------------------------------------------------------------------------- #
 # state + persistence                                                         #
 # --------------------------------------------------------------------------- #
-def _load_state(db_path: str, hub_mode: str) -> tuple[Wiki, WikiEconomy]:
-    """Load the combined {wiki, economy} snapshot (or legacy wiki-only, or fresh)."""
-    if os.path.exists(db_path):
-        with open(db_path, encoding="utf-8") as fh:
-            data = json.load(fh)
-        if "wiki" in data:  # combined format (schema 2)
-            return Wiki.from_json(data["wiki"]), WikiEconomy.from_json(
-                data.get("economy", {})
-            )
-        if "pages" in data:  # legacy wiki-only snapshot
-            return Wiki.from_json(data), WikiEconomy()
+def _state_from_data(data: dict, hub_mode: str) -> tuple[Wiki, WikiEconomy]:
+    if data and "wiki" in data:  # combined format (schema 2)
+        return Wiki.from_json(data["wiki"]), WikiEconomy.from_json(
+            data.get("economy", {})
+        )
+    if data and "pages" in data:  # legacy wiki-only snapshot
+        return Wiki.from_json(data), WikiEconomy()
     return Wiki(scoring=ScoreEngine(mode=hub_mode)), WikiEconomy()
 
 
+def _load_state(db_path: str, hub_mode: str) -> tuple[Wiki, WikiEconomy]:
+    """Load state from Postgres (if DATABASE_URL set) else a local JSON file."""
+    from nightwish import db
+
+    url = db.database_url()
+    if url:
+        db.init(url)
+        return _state_from_data(db.load(url), hub_mode)
+    if os.path.exists(db_path):
+        with open(db_path, encoding="utf-8") as fh:
+            return _state_from_data(json.load(fh), hub_mode)
+    return _state_from_data({}, hub_mode)
+
+
 def _save_state(db_path: str, wiki: Wiki, econ: WikiEconomy) -> None:
+    from nightwish import db
+
+    payload = {"schema": 2, "wiki": wiki.to_json(), "economy": econ.to_json()}
+    url = db.database_url()
+    if url:
+        db.save(url, payload)
+        return
     directory = os.path.dirname(os.path.abspath(db_path))
     os.makedirs(directory, exist_ok=True)
-    payload = {"schema": 2, "wiki": wiki.to_json(), "economy": econ.to_json()}
     fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
