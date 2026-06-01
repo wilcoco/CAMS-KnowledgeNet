@@ -78,3 +78,22 @@ def test_invest_over_balance_shows_error():
 def test_unknown_page_404():
     r = TestClient(app).get("/wiki/없는문서")
     assert r.status_code == 404 and "아직 없는 페이지" in r.text
+
+
+def test_missing_link_prefills_ai_draft_for_logged_in_user():
+    c = login("Json")
+    # 빈 위키링크를 가진 문서를 만든 뒤, 그 링크를 누르면(=없는 페이지 방문)
+    # AI 초안이 textarea에 채워져 나온다.
+    c.post("/wiki", data={"title": "하이그로시", "body": "무도장 사출 [[금형 온도]]"})
+    r = c.get("/wiki/금형-온도")
+    assert r.status_code == 404
+    assert "AI" in r.text and "초안" in r.text
+    assert "## 질문" in r.text          # stub 초안 골격이 textarea에 들어감
+    assert "하이그로시" in r.text        # 백링크가 문맥으로 따라옴
+
+
+def test_missing_link_anonymous_no_draft():
+    # 비로그인 사용자에겐 초안을 생성하지 않는다(만들 수 없으므로).
+    r = TestClient(app).get("/wiki/금형-온도")
+    assert r.status_code == 404
+    assert "## 질문" not in r.text

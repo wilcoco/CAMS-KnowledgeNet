@@ -4,10 +4,15 @@
 <div class="card">
   <h2>아직 없는 페이지: <code>{{ slug }}</code></h2>
   {% if user %}
-    <p>이 제목으로 새 페이지를 만들 수 있습니다.</p>
+    {% if draft %}
+      <p>🤖 <strong>AI가 이 빈 링크를 질문으로 보고 초안을 채웠습니다.</strong>
+        자유롭게 고친 뒤 저장하세요 — 사람이 큐레이션하는 것이 핵심입니다.</p>
+    {% else %}
+      <p>이 제목으로 새 페이지를 만들 수 있습니다.</p>
+    {% endif %}
     <form method="post" action="/wiki">
-      <input type="hidden" name="title" value="{{ slug }}">
-      <textarea name="body" placeholder="내용을 적어주세요..."></textarea>
+      <input type="hidden" name="title" value="{{ title or slug }}">
+      <textarea name="body" rows="14" placeholder="내용을 적어주세요...">{{ draft or "" }}</textarea>
       <div style="margin-top:.6rem;"><button type="submit">이 제목으로 만들기</button>
         <a href="/">홈으로</a></div>
     </form>

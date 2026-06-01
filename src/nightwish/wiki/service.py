@@ -131,6 +131,21 @@ class WikiService:
         page = self._require_page(slug)
         return [s for s in page.links if self.db.get(WikiPage, s) is None]
 
+    # -- AI 초안 (빈 위키링크 = 새 질문) ---------------------------------------
+    def draft_for(self, title: str) -> str:
+        """아직 없는 페이지 제목을 *질문*으로 보고 AI 초안 본문을 만든다.
+
+        같은 슬러그를 링크한 기존 페이지(백링크)를 문맥으로 넘긴다 — 그 링크를
+        처음 건 '원래 문서'가 이 항목의 필요를 먼저 본 안목이므로, 초안이 그
+        맥락에 붙도록 한다. 키가 없으면 북키퍼가 결정론적 골격으로 폴백한다.
+        """
+        slug = slugify(title)
+        context = "\n".join(
+            f"{p.title}: {p.summary}" if p.summary else p.title
+            for p in self.backlinks(slug)
+        )
+        return self.bookkeeper.draft(title, context)
+
     # -- 인증 (외부 측정) ------------------------------------------------------
     def verify(self, slug: str, measurement: Measurement) -> bool:
         self._require_page(slug)

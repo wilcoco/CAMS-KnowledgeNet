@@ -47,6 +47,15 @@ class BookkeepingResult:
 class Bookkeeper(Protocol):
     def analyze(self, title: str, body: str) -> BookkeepingResult: ...
 
+    def draft(self, title: str, context: str = "") -> str:
+        """빈 위키링크 제목을 *질문*으로 보고 페이지 본문 초안을 만든다.
+
+        설계상 노드 = 인간Q + AI답이므로, 채워지지 않은 링크를 누르는 것은 곧
+        새 질문을 던지는 행위다. AI가 *재료(죽은 노동)* 로서 초안을 내면 사람이
+        받아 큐레이션한다(산 노동). ``context`` 는 이 항목을 링크한 기존 문서들.
+        """
+        ...
+
 
 class StubBookkeeper:
     """네트워크 없는 결정론적 북키핑.
@@ -78,6 +87,29 @@ class StubBookkeeper:
             entities=[],
         )
 
+    def draft(self, title: str, context: str = "") -> str:
+        """키 없는 환경의 결정론적 초안: 제목을 질문으로 세운 골격.
+
+        실제 AI 답은 :class:`LLMBookkeeper` 의 몫이다. 여기서는 사람이 바로 이어
+        쓸 수 있게 질문 틀과 (있다면) 링크 출처만 제시한다.
+        """
+        lines = [f"# {title}", ""]
+        if context.strip():
+            lines += ["> 이 항목을 링크한 문서:", ""]
+            lines += [f"> - {ln}" for ln in context.strip().splitlines()]
+            lines += [""]
+        lines += [
+            "## 질문",
+            "",
+            f"{title}(이)란 무엇이며, 왜 중요한가?",
+            "",
+            "## 답 (초안)",
+            "",
+            "_아직 채워지지 않았습니다. 직접 작성하거나, `ANTHROPIC_API_KEY` 를 "
+            "설정하면 AI가 초안을 생성합니다._",
+        ]
+        return "\n".join(lines)
+
 
 _SCHEMA = {
     "type": "object",
@@ -98,6 +130,18 @@ _SYSTEM = (
     "page titles that should be wiki-linked. Always include any titles already "
     "marked with [[double brackets]] in the body among the wikilinks. Keep it "
     "faithful — do not invent facts."
+)
+
+
+_DRAFT_SYSTEM = (
+    "You are the drafting layer of a collaborative knowledge wiki (after "
+    "Karpathy's LLM Wiki). A user clicked an empty wiki-link; treat its title as "
+    "a question/topic and write a concise FIRST-DRAFT page that a human will then "
+    "curate and verify. Write in the title's language (Korean if the title is "
+    "Korean). Use short markdown: one heading, then 2-4 short paragraphs or "
+    "bullets. Link clearly-related concepts with [[double brackets]]. Be honest "
+    "about uncertainty — do NOT invent specific numbers, sources, or facts; frame "
+    "open questions plainly so the human knows what to verify."
 )
 
 
@@ -152,6 +196,27 @@ class LLMBookkeeper:
             links=list(seen),
             entities=[e.strip() for e in data.get("entities", []) if e.strip()],
         )
+
+    def draft(self, title: str, context: str = "") -> str:
+        user = f"TITLE: {title}"
+        if context.strip():
+            user += f"\n\nThis page is linked from these existing pages:\n{context.strip()}"
+        try:
+            resp = self.client.messages.create(
+                model=self.model,
+                max_tokens=1024,
+                system=[{
+                    "type": "text",
+                    "text": _DRAFT_SYSTEM,
+                    "cache_control": {"type": "ephemeral"},
+                }],
+                messages=[{"role": "user", "content": user}],
+            )
+        except Exception:
+            # 네트워크/한도/인증 오류 시 결정론적 stub 초안으로 폴백
+            return self._stub.draft(title, context)
+        text = "".join(b.text for b in resp.content if b.type == "text").strip()
+        return text or self._stub.draft(title, context)
 
 
 def make_bookkeeper() -> Bookkeeper:

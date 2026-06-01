@@ -33,6 +33,23 @@ def test_stub_bookkeeper_analyze():
     assert r.links == ["금형-온도", "소재-선택"]
 
 
+def test_stub_bookkeeper_draft_frames_title_as_question():
+    bk = StubBookkeeper()
+    body = bk.draft("금형 온도", context="하이그로시: 무도장 사출.")
+    assert "# 금형 온도" in body
+    assert "## 질문" in body and "금형 온도" in body
+    assert "하이그로시" in body  # 링크 출처(백링크)가 문맥으로 들어감
+
+
+def test_draft_for_uses_backlinks_as_context(svc):
+    svc.ensure_user("Json")
+    # '금형 온도'를 링크하는 원래 문서가 있으면 초안 문맥에 그 제목이 따라온다.
+    svc.create_page("json", "하이그로시", "무도장 사출. 참고 [[금형 온도]].")
+    body = svc.draft_for("금형 온도")
+    assert "금형 온도" in body
+    assert "하이그로시" in body  # 백링크 = 이 항목의 필요를 먼저 본 문서
+
+
 def test_create_page_runs_bookkeeping(svc):
     svc.ensure_user("Json")
     p = svc.create_page("json", "하이그로시", "무도장 사출. 참고 [[금형 온도]].")

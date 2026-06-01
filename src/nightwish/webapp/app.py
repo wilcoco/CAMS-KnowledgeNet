@@ -178,8 +178,14 @@ def create_page(
 def view_page(request: Request, slug: str, svc: WikiService = Depends(get_service)):
     user = current_user(request, svc)
     if svc.get_page(slug) is None:
+        # 빈 위키링크 = 새 질문. 로그인 사용자에겐 AI가 초안을 채워 큐레이션하게 한다.
+        title = slug.replace("-", " ")
+        draft = svc.draft_for(title) if user else ""
         return templates.TemplateResponse(
-            request, "missing.html", {"user": user, "slug": slug}, status_code=404
+            request, "missing.html",
+            {"user": user, "balance": user.balance if user else 0.0,
+             "slug": slug, "title": title, "draft": draft},
+            status_code=404,
         )
     return _page_view(request, svc, slug, user)
 
