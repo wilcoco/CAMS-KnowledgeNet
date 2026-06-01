@@ -33,6 +33,7 @@
 
 | 영역 | 위치 | 내용 |
 |------|------|------|
+| **투자 설명 자료** | [`docs/investor-brief.md`](docs/investor-brief.md) | 문제→솔루션→해자→실증→GTM(B2B)→리스크→Ask 종합 IR 요약 |
 | **설계 기록** | [`docs/design/`](docs/design/) | 1차 설계 논의 정리본(원본) · 용어집 · 진화 계보 |
 | **실행 로드맵** | [`docs/roadmap.md`](docs/roadmap.md) | 부트스트랩(첫 카토 온보딩) · MVP 우선순위 · 검증 닻 · 화폐공학 · 거버넌스 · 법무 |
 | **B2B 피벗** | [`docs/b2b-pivot.md`](docs/b2b-pivot.md) | "현실 접점"(오라클·환전·부트스트랩)을 조직 경계로 닫는 정공법 · 가치제안 · 파일럿 정의 |
