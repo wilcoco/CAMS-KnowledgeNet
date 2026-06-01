@@ -98,40 +98,69 @@ class UnifiedService:
     # -- persistence ----------------------------------------------------------
     @staticmethod
     def _load(path: str, hub_mode: str) -> tuple[OntologyTree, WikiEconomy]:
-        if not os.path.exists(path):
-            # Cutover convenience: if there's a legacy ``wiki.json`` from the old
-            # MVP next to where the unified snapshot would live, seed from it
-            # (migrating the flat thread onto the recursive model). The legacy
-            # file is left untouched — the unified app writes forward to ``path``,
-            # so rolling back to ``nightwish-mvp`` still works.
-            legacy = os.path.join(os.path.dirname(os.path.abspath(path)), "wiki.json")
-            if os.path.abspath(legacy) != os.path.abspath(path) and os.path.exists(legacy):
-                return UnifiedService._from_file(legacy)
-            from nightwish.scoring import ScoreEngine
+        # Durable first: on Railway (DATABASE_URL set) the local disk is
+        # *ephemeral* — it's wiped on every restart/redeploy, which silently
+        # drops freshly-asked nodes (endorse/follow-up then 404 against a node
+        # the browser still shows). So persist to Postgres when available,
+        # exactly like ``nightwish-mvp`` does, and fall back to a local file
+        # only for offline/dev runs.
+        from nightwish import db
 
-            return OntologyTree(scoring=ScoreEngine(mode=hub_mode)), WikiEconomy()
-        return UnifiedService._from_file(path)
+        url = db.database_url()
+        if url:
+            db.init(url)
+            snapshot = db.load(url)
+            if snapshot is not None:
+                return UnifiedService._from_data(snapshot)
+            # First boot on a fresh DB: seed from a legacy snapshot if one is
+            # reachable (local files), so the cutover doesn't start empty.
+            return UnifiedService._seed(path, hub_mode)
+        if os.path.exists(path):
+            return UnifiedService._from_file(path)
+        return UnifiedService._seed(path, hub_mode)
+
+    @staticmethod
+    def _seed(path: str, hub_mode: str) -> tuple[OntologyTree, WikiEconomy]:
+        # Cutover convenience: if there's a legacy ``wiki.json`` from the old MVP
+        # next to where the unified snapshot would live, seed from it (migrating
+        # the flat thread onto the recursive model). The legacy file is left
+        # untouched — the unified app writes forward, so rolling back still works.
+        legacy = os.path.join(os.path.dirname(os.path.abspath(path)), "wiki.json")
+        if os.path.abspath(legacy) != os.path.abspath(path) and os.path.exists(legacy):
+            return UnifiedService._from_file(legacy)
+        from nightwish.scoring import ScoreEngine
+
+        return OntologyTree(scoring=ScoreEngine(mode=hub_mode)), WikiEconomy()
 
     @staticmethod
     def _from_file(path: str) -> tuple[OntologyTree, WikiEconomy]:
         with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
+            return UnifiedService._from_data(json.load(fh))
+
+    @staticmethod
+    def _from_data(data: dict) -> tuple[OntologyTree, WikiEconomy]:
         if "tree" in data:  # native unified snapshot
             return (
                 OntologyTree.from_json(data["tree"]),
                 WikiEconomy.from_json(data.get("econ", {})),
             )
-        # legacy wiki.json (flat pages) → migrate onto the unified model
+        # legacy wiki/mvp snapshot (flat pages) → migrate onto the unified model
         wiki = data.get("wiki", data)
-        econ = WikiEconomy.from_json(data.get("econ", {}))
+        econ = WikiEconomy.from_json(data.get("econ", data.get("economy", {})))
         return OntologyTree.from_wiki_json(wiki), econ
 
     def save(self) -> None:
+        from nightwish import db
+
+        payload = {"schema": "unified-1", "tree": self.tree.to_json(),
+                   "econ": self.econ.to_json()}
+        url = db.database_url()
+        if url:
+            db.save(url, payload)
+            return
         directory = os.path.dirname(os.path.abspath(self.db_path))
         os.makedirs(directory, exist_ok=True)
         tmp = self.db_path + ".tmp"
-        payload = {"schema": "unified-1", "tree": self.tree.to_json(),
-                   "econ": self.econ.to_json()}
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, ensure_ascii=False, indent=2)
         os.replace(tmp, self.db_path)

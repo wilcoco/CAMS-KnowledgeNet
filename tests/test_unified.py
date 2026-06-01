@@ -135,3 +135,42 @@ def test_state_persists_across_reload(client):
     reloaded = client.get(f"/api/nodes/{nid}").json()
     assert reloaded["frozen"]
     assert any(t["body"] == "메모" for t in reloaded["thread"])
+
+
+def test_durable_db_survives_an_ephemeral_disk_restart(monkeypatch, tmp_path):
+    """On Railway the local disk is wiped on restart; state must live in the DB.
+
+    Regression: the unified app used to persist only to a local JSON file, so a
+    freshly-asked node vanished on restart and endorse/follow-up 404'd against a
+    node the browser still showed. With DATABASE_URL set, the snapshot must go
+    to (and reload from) the DB even though the file path no longer exists.
+    """
+    from nightwish import db
+
+    store: dict = {}
+    monkeypatch.setattr(db, "database_url", lambda: "postgres://fake")
+    monkeypatch.setattr(db, "init", lambda url: None)
+    monkeypatch.setattr(db, "load", lambda url: store.get(1))
+    monkeypatch.setattr(db, "save", lambda url, data: store.__setitem__(1, data))
+
+    gone = str(tmp_path / "ephemeral" / "app.json")  # never written in DB mode
+    unified.reset_service(unified.UnifiedService(gone))
+    with TestClient(unified.app) as c:
+        nid = c.post("/api/ask", json={"question": "도장 없는 범퍼", "author": "me"}).json()["node"]["id"]
+        c.post("/api/mint", json={"account": "me", "amount": 100})
+
+    assert 1 in store                       # persisted to the DB, not the file
+    import os
+    assert not os.path.exists(gone)         # the ephemeral file was never created
+
+    # simulate a restart: brand-new process, same DB, no file on disk
+    unified.reset_service(unified.UnifiedService(gone))
+    with TestClient(unified.app) as c2:
+        assert c2.get(f"/api/nodes/{nid}").status_code == 200
+        endorsed = c2.post("/api/endorse", json={"account": "me", "node_id": nid, "amount": 10})
+        assert endorsed.status_code == 200, endorsed.text
+        followup = c2.post(f"/api/nodes/{nid}/contribute",
+                           json={"kind": "followup", "author": "me", "body": "열처리 온도?"})
+        assert followup.status_code == 200
+        assert len(followup.json()["thread"]) == 1
+    unified.reset_service(None)
