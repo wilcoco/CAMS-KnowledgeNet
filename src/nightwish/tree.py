@@ -31,14 +31,48 @@ the chain — :meth:`OntologyTree.resolved_question` / :meth:`resolved_answer`.
 Branches are never deleted: a branch with no follow-ups goes **DORMANT** and can
 be **revived** later (the Galileo problem — truth's time-asymmetry is preserved;
 the tree refuses to converge to a single frozen answer).
+
+Unified knowledge core
+----------------------
+This module is the **single source of truth** for the whole system: every unit
+of knowledge — a wiki page, an open public query, a link-stub, an AI answer, and
+every follow/fork/contribution on a thread — is *one* :class:`Node`. The same
+recursive Q→A→contribution module therefore applies to **every** slot that needs
+filling, not just a top-level question. Nodes additionally carry wiki concerns:
+
+* ``slug`` / ``links`` — wikilinks (``[[Title]]``) that auto-create **stub** nodes,
+* ``space`` — the layer the node lives in (``public`` commons or a group id;
+  one-way membrane: group nodes may reference public, never the reverse),
+* ``frozen`` / ``model`` / ``answered_at`` — provenance stamp on an AI answer.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 
 from nightwish.scoring import ScoreEngine
+
+#: author marker for an auto-created, not-yet-written stub node
+STUB_AUTHOR = "(stub)"
+
+_LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+_SLUG_RE = re.compile(r"[^a-z0-9가-힣]+")
+
+
+def slugify(title: str) -> str:
+    """A stable, URL-safe id derived from a human title (CJK preserved)."""
+    s = _SLUG_RE.sub("-", title.strip().lower()).strip("-")
+    return s or "node"
+
+
+def extract_links(text: str) -> list[str]:
+    """Wikilink targets (``[[Title]]``) in order, de-duplicated."""
+    seen: dict[str, None] = {}
+    for m in _LINK_RE.finditer(text or ""):
+        seen.setdefault(m.group(1).strip(), None)
+    return list(seen)
 
 
 class OntologyError(Exception):
@@ -53,6 +87,8 @@ class Action(str, Enum):
     FORK = "fork"          # 분기 — a competing answer (burden of proof)
     CONTRIBUTE = "contribute"  # 추가 기여 — context / rebuttal / link / ontology
     POINTER = "pointer"    # a lead, not an answer (e.g. "person X knows this")
+    QUERY = "query"        # 질의 — an open question awaiting an answer (no answer yet)
+    STUB = "stub"          # a placeholder created by an incoming wikilink
 
 
 class NodeStatus(str, Enum):
@@ -75,11 +111,38 @@ class Node:
     created_at: int = 0
     status: NodeStatus = NodeStatus.ACTIVE
     children: list[str] = field(default_factory=list)
+    # -- wiki concerns (all optional; default-safe for tree/sim/service flows) --
+    #: stable url id; falls back to ``id`` when empty
+    slug: str = ""
+    #: wikilink target slugs found in this node's answer/body
+    links: list[str] = field(default_factory=list)
+    #: an AI answer frozen with provenance is immutable — edit via contributions
+    frozen: bool = False
+    #: model that produced a frozen answer (e.g. "claude-opus-4-8")
+    model: str = ""
+    #: ISO timestamp the answer was frozen
+    answered_at: str = ""
+    #: layer this node lives in ("public" commons or a group id)
+    space: str = "public"
+    #: last mutation tick / last editor (wiki provenance)
+    updated_at: int = 0
+    last_editor: str = ""
 
     @property
     def is_answer(self) -> bool:
-        """A POINTER is a lead, not an answer; everything else answers."""
-        return self.action is not Action.POINTER
+        """A POINTER/QUERY/STUB carries no answer; everything else does."""
+        return self.action not in (Action.POINTER, Action.QUERY, Action.STUB)
+
+    @property
+    def is_stub(self) -> bool:
+        """A placeholder created by an incoming link but not yet written."""
+        return self.action is Action.STUB or (
+            self.author == STUB_AUTHOR and not self.answer.strip()
+        )
+
+    @property
+    def is_query(self) -> bool:
+        return self.action is Action.QUERY
 
 
 @dataclass
@@ -115,9 +178,37 @@ class OntologyTree:
         if parent_id is not None:
             self.nodes[parent_id].status = NodeStatus.ACTIVE
 
+    def _finalize(self, node: Node) -> None:
+        """Post-creation: assign a slug, stamp provenance, wire wikilinks → stubs.
+
+        Any ``[[Title]]`` in the node's answer auto-creates a **stub** node (in the
+        same layer) so the graph stays connected and the target can already accrue
+        authority — exactly like the wiki, but on the unified node model.
+        """
+        if not node.slug:
+            node.slug = slugify(node.question or node.id)
+        node.updated_at = self._clock
+        if not node.last_editor:
+            node.last_editor = node.author
+        link_slugs: list[str] = []
+        for title in extract_links(node.answer):
+            ts = slugify(title)
+            if ts == node.slug or ts in link_slugs:
+                continue
+            link_slugs.append(ts)
+            if ts not in self.nodes:
+                self.nodes[ts] = Node(
+                    id=ts, question=title, answer="", author=STUB_AUTHOR,
+                    action=Action.STUB, created_at=self._tick(),
+                    slug=ts, space=node.space, updated_at=self._clock,
+                    last_editor=STUB_AUTHOR,
+                )
+        node.links = link_slugs
+
     # -- creation --------------------------------------------------------------
     def add_root(
-        self, node_id: str, question: str, answer: str, author: str, stake: float = 0.0
+        self, node_id: str, question: str, answer: str, author: str,
+        stake: float = 0.0, *, space: str = "public",
     ) -> Node:
         """Open a brand-new question thread with its first answer."""
         if node_id in self.nodes:
@@ -131,14 +222,17 @@ class OntologyTree:
             stake=stake,
             value_add=True,
             created_at=self._tick(),
+            space=space,
         )
         self.nodes[node_id] = node
+        self._finalize(node)
         if stake > 0:
             self.scoring.link(author, node_id, weight=stake)
         return node
 
     def follow(
-        self, node_id: str, parent_id: str, follower: str, stake: float
+        self, node_id: str, parent_id: str, follower: str, stake: float,
+        *, space: str | None = None,
     ) -> Node:
         """계승 — agree with and extend an existing branch (no contribution).
 
@@ -161,8 +255,10 @@ class OntologyTree:
             stake=stake,
             value_add=False,
             created_at=self._tick(),
+            space=space if space is not None else parent.space,
         )
         self._attach(parent, node)
+        self._finalize(node)
         # The follower links to the parent content — earlier discoverers of the
         # parent gain hub as this follow piles on.
         if stake > 0:
@@ -179,6 +275,7 @@ class OntologyTree:
         *,
         question: str | None = None,
         value_add: bool = True,
+        space: str | None = None,
     ) -> Node:
         """추가 기여 — add context / rebuttal / link / ontology as a new node."""
         parent = self._require(parent_id)
@@ -195,8 +292,10 @@ class OntologyTree:
             stake=stake,
             value_add=value_add,
             created_at=self._tick(),
+            space=space if space is not None else parent.space,
         )
         self._attach(parent, node)
+        self._finalize(node)
         if stake > 0:
             self.scoring.link(author, parent_id, weight=stake)
         return node
@@ -210,6 +309,7 @@ class OntologyTree:
         stake: float,
         *,
         question: str | None = None,
+        space: str | None = None,
     ) -> Node:
         """분기 — a competing answer to the same question (burden of proof).
 
@@ -230,8 +330,10 @@ class OntologyTree:
             stake=stake,
             value_add=True,
             created_at=self._tick(),
+            space=space if space is not None else parent.space,
         )
         self._attach(parent, node)
+        self._finalize(node)
         # A fork links to the *grandparent* context (the shared question), not as
         # an endorsement of the parent answer it competes with.
         if stake > 0:
@@ -239,7 +341,8 @@ class OntologyTree:
         return node
 
     def add_pointer(
-        self, node_id: str, parent_id: str, author: str, lead: str
+        self, node_id: str, parent_id: str, author: str, lead: str,
+        *, space: str | None = None,
     ) -> Node:
         """A lead toward an off-system expert — not an answer; starts dormant."""
         parent = self._require(parent_id)
@@ -254,8 +357,10 @@ class OntologyTree:
             value_add=False,
             created_at=self._tick(),
             status=NodeStatus.DORMANT,
+            space=space if space is not None else parent.space,
         )
         self._attach(parent, node, wake_parent=False)
+        self._finalize(node)
         return node
 
     def _attach(self, parent: Node, node: Node, *, wake_parent: bool = True) -> None:
@@ -344,3 +449,261 @@ class OntologyTree:
 
     def roots(self) -> list[Node]:
         return [n for n in self.nodes.values() if n.action is Action.ROOT]
+
+    # -- open queries (a slot whose answer is not filled yet) -----------------
+    def open_query(
+        self, node_id: str, question: str, author: str,
+        *, space: str = "public", stake: float = 0.0,
+    ) -> Node:
+        """Post an **open question** — a first-class slot with no answer yet.
+
+        It is searchable and answerable (by AI or a human). Answering it fills the
+        *same* node in place, so one slot == one node throughout its lifecycle.
+        """
+        if node_id in self.nodes:
+            raise OntologyError(f"node {node_id!r} already exists")
+        node = Node(
+            id=node_id, question=question, answer="", author=author,
+            action=Action.QUERY, stake=stake, value_add=True,
+            created_at=self._tick(), space=space,
+        )
+        self.nodes[node_id] = node
+        self._finalize(node)
+        if stake > 0:
+            self.scoring.link(author, node_id, weight=stake)
+        return node
+
+    def answer_query(
+        self, node_id: str, answer: str, author: str, *, model: str = "",
+    ) -> Node:
+        """Fill an open query's answer in place — the slot becomes an answer node.
+
+        The same module that answers a brand-new question answers any open slot:
+        the node turns into a (freeze-able, provenance-stamped) answer and keeps
+        its identity, so contributions already attached to it stay attached.
+        """
+        node = self._require(node_id)
+        if node.action is not Action.QUERY:
+            raise OntologyError(f"node {node_id!r} is not an open query")
+        node.answer = answer
+        node.author = node.author or author
+        node.last_editor = author
+        node.action = Action.ROOT
+        node.status = NodeStatus.ACTIVE
+        node.updated_at = self._tick()
+        if model:
+            self.mark_answered(node_id, model)
+        self._finalize(node)
+        return node
+
+    def open_queries(self, space: str | None = None) -> list[Node]:
+        return [
+            n for n in self.nodes.values()
+            if n.action is Action.QUERY and self._visible(n, space)
+        ]
+
+    # -- frozen answers + edits -----------------------------------------------
+    def mark_answered(self, node_id: str, model: str) -> Node:
+        """Freeze a node as a provenance-stamped AI answer (immutable body).
+
+        Edits afterwards must come as contributions/forks, never as a body edit —
+        this preserves the answer's provenance.
+        """
+        from datetime import datetime, timezone
+
+        node = self._require(node_id)
+        node.frozen = True
+        node.model = model
+        node.answered_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        return node
+
+    def edit(self, node_id: str, answer: str, editor: str) -> Node:
+        """Edit a node's answer in place (rejected once frozen)."""
+        node = self._require(node_id)
+        if node.frozen:
+            raise OntologyError(
+                f"node {node_id!r} is a frozen answer — edit via contributions"
+            )
+        node.answer = answer
+        node.last_editor = editor
+        node.updated_at = self._tick()
+        self._finalize(node)
+        return node
+
+    # -- layers (public commons + group overlays) -----------------------------
+    @staticmethod
+    def _visible(node: Node, space: str | None) -> bool:
+        """A viewer in ``space`` sees the public commons ∪ that space.
+
+        ``space=None`` disables filtering (admin/tests). One-way membrane: a group
+        node may reference public, but a public viewer never sees a group node.
+        """
+        return space is None or node.space == "public" or node.space == space
+
+    def visible_nodes(self, space: str | None = None) -> list[Node]:
+        return [n for n in self.nodes.values() if self._visible(n, space)]
+
+    def backlinks(self, slug: str, space: str | None = None) -> list[Node]:
+        return [
+            n for n in self.nodes.values()
+            if slug in n.links and self._visible(n, space)
+        ]
+
+    # -- search ----------------------------------------------------------------
+    def search(
+        self, query: str, space: str | None = None, limit: int = 50
+    ) -> list[Node]:
+        """Forgiving keyword search over question + answer + descendant thread.
+
+        Per-token substring frequency (CJK-morphology tolerant, order-free) with a
+        phrase boost. Filtered to the viewer's layer. The whole subtree's text is
+        included so contributions/follow-ups are searchable too.
+        """
+        q = query.strip().lower()
+        if not q:
+            return [n for n in self.visible_nodes(space) if not n.is_stub]
+        tokens = [t for t in re.split(r"\s+", q) if t]
+        scored: list[tuple[float, Node]] = []
+        for node in self.nodes.values():
+            if not self._visible(node, space) or node.is_stub:
+                continue
+            title = node.question.lower()
+            text = self._subtree_text(node.id, space)
+            score = 0.0
+            for t in tokens:
+                score += 3.0 * title.count(t) + 1.0 * text.count(t)
+            if q in title:
+                score += 5.0
+            elif q in text:
+                score += 2.0
+            if score > 0:
+                scored.append((score, node))
+        scored.sort(key=lambda sn: (-sn[0], -sn[1].updated_at))
+        return [n for _s, n in scored[:limit]]
+
+    def _subtree_text(self, node_id: str, space: str | None = None) -> str:
+        """Question + answer of a node and all descendants *visible in ``space``*.
+
+        Descendants in another layer are skipped so a public search can never
+        match on a group-private contribution's text (no layer leak via search).
+        """
+        node = self.nodes[node_id]
+        parts = [node.question, node.answer]
+        for child_id in node.children:
+            if self._visible(self.nodes[child_id], space):
+                parts.append(self._subtree_text(child_id, space))
+        return " ".join(parts).lower()
+
+    # -- persistence (the single unified snapshot) ----------------------------
+    def to_json(self) -> dict:
+        return {
+            "schema": 1,
+            "clock": self._clock,
+            "large_stake_threshold": self.large_stake_threshold,
+            "scoring": {
+                "mode": self.scoring.mode,
+                "authority": dict(self.scoring.authority),
+                "hub": dict(self.scoring.hub),
+                "linkers": {k: list(v) for k, v in self.scoring._linkers.items()},
+            },
+            "nodes": [self._node_to_json(n) for n in self.nodes.values()],
+        }
+
+    @staticmethod
+    def _node_to_json(n: Node) -> dict:
+        return {
+            "id": n.id, "question": n.question, "answer": n.answer,
+            "author": n.author, "action": n.action.value,
+            "parent_id": n.parent_id, "stake": n.stake, "value_add": n.value_add,
+            "created_at": n.created_at, "status": n.status.value,
+            "children": list(n.children), "slug": n.slug, "links": list(n.links),
+            "frozen": n.frozen, "model": n.model, "answered_at": n.answered_at,
+            "space": n.space, "updated_at": n.updated_at,
+            "last_editor": n.last_editor,
+        }
+
+    @staticmethod
+    def _node_from_json(d: dict) -> Node:
+        return Node(
+            id=d["id"], question=d.get("question", ""), answer=d.get("answer", ""),
+            author=d.get("author", ""), action=Action(d.get("action", "root")),
+            parent_id=d.get("parent_id"), stake=d.get("stake", 0.0),
+            value_add=d.get("value_add", True), created_at=d.get("created_at", 0),
+            status=NodeStatus(d.get("status", "active")),
+            children=list(d.get("children", [])), slug=d.get("slug", ""),
+            links=list(d.get("links", [])), frozen=d.get("frozen", False),
+            model=d.get("model", ""), answered_at=d.get("answered_at", ""),
+            space=d.get("space", "public"), updated_at=d.get("updated_at", 0),
+            last_editor=d.get("last_editor", ""),
+        )
+
+    @classmethod
+    def from_json(cls, data: dict) -> "OntologyTree":
+        from collections import defaultdict
+
+        sc = data.get("scoring", {})
+        scoring = ScoreEngine(mode=sc.get("mode", "harmonic"))
+        scoring.authority = defaultdict(float, sc.get("authority", {}))
+        scoring.hub = defaultdict(float, sc.get("hub", {}))
+        scoring._linkers = defaultdict(
+            list, {k: list(v) for k, v in sc.get("linkers", {}).items()}
+        )
+        tree = cls(scoring=scoring)
+        tree._clock = data.get("clock", 0)
+        tree.large_stake_threshold = data.get("large_stake_threshold", 25.0)
+        for d in data.get("nodes", []):
+            tree.nodes[d["id"]] = cls._node_from_json(d)
+        return tree
+
+    # -- migrations from the two legacy app formats ---------------------------
+    @classmethod
+    def from_wiki_json(cls, data: dict) -> "OntologyTree":
+        """Import a legacy ``wiki.json`` snapshot (flat pages + contributions).
+
+        Each page becomes a node (ROOT/QUERY); its flat ``contributions`` thread
+        becomes child nodes (comment→CONTRIBUTE, fork→FORK, followup/answer→
+        CONTRIBUTE) so the thread is now recursive on the unified model.
+        """
+        from collections import defaultdict
+
+        sc = data.get("scoring", {})
+        scoring = ScoreEngine(mode=sc.get("mode", "harmonic"))
+        scoring.authority = defaultdict(float, sc.get("authority", {}))
+        scoring.hub = defaultdict(float, sc.get("hub", {}))
+        scoring._linkers = defaultdict(
+            list, {k: list(v) for k, v in sc.get("linkers", {}).items()}
+        )
+        tree = cls(scoring=scoring)
+        clock = data.get("clock", 0)
+        kind_map = {"fork": Action.FORK}
+        for p in data.get("pages", []):
+            is_query = p.get("kind") == "query"
+            node = Node(
+                id=p["slug"], question=p["title"], answer=p.get("body", ""),
+                author=p["author"],
+                action=Action.QUERY if is_query else Action.ROOT,
+                created_at=p.get("created_at", 0),
+                slug=p["slug"], links=list(p.get("links", [])),
+                frozen=p.get("frozen", False), model=p.get("model", ""),
+                answered_at=p.get("answered_at", ""),
+                space=p.get("space", "public"),
+                updated_at=p.get("updated_at", 0),
+                last_editor=p.get("last_editor", ""),
+            )
+            if node.author == STUB_AUTHOR and not node.answer.strip():
+                node.action = Action.STUB
+            tree.nodes[node.id] = node
+            for c in p.get("contributions", []):
+                cid = f"{p['slug']}::{c['id']}"
+                child = Node(
+                    id=cid, question="", answer=c.get("body", ""),
+                    author=c.get("author", ""),
+                    action=kind_map.get(c.get("kind"), Action.CONTRIBUTE),
+                    parent_id=node.id, created_at=node.created_at,
+                    slug=cid, space=c.get("space", node.space),
+                    model=c.get("model", ""), last_editor=c.get("author", ""),
+                )
+                tree.nodes[cid] = child
+                node.children.append(cid)
+        tree._clock = clock
+        return tree
