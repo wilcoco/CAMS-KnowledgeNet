@@ -9,13 +9,20 @@
    │           256 엔진을 얹은 '완성차'
    │
 새 설계(2026) 수렴을 거부하는 살아있는 온톨로지 트리
-              · 노드 = 인간Q + AI답          → tree.Node
-              · 포크로 분기                   → tree.OntologyTree.fork
-              · 죽지 않고 잠복·부활            → tree.NodeStatus / revive
-              · 기여 + 확신이 화폐            → economy.Ledger.stake
-              · 암묵지를 시장으로 해방         → pipeline (3단계, ③ 사람 라우팅)
-              · 사람 간 검증 지식 구조 자체가
-                다음 질문의 답               → pipeline 1단계 검색
+   │           · 노드 = 인간Q + AI답          → tree.Node
+   │           · 포크로 분기                   → tree.OntologyTree.fork
+   │           · 죽지 않고 잠복·부활            → tree.NodeStatus / revive
+   │           · 기여 + 확신이 화폐            → economy.Ledger.stake
+   │           · 암묵지를 시장으로 해방         → pipeline (3단계, ③ 사람 라우팅)
+   │           · 사람 간 검증 지식 구조 자체가
+   │             다음 질문의 답               → pipeline 1단계 검색
+   │
+통합 재귀(2026) 한 노드 종류 · 한 모듈 · 무한 재귀
+              · 모든 것이 채워야 할 슬롯       → tree.Node 한 종류
+              · 질문→답→보강/후속/정정/포크
+                모듈이 모든 슬롯에 재귀 적용    → unified.app
+              · 위키 + 온톨로지 두 프로토타입을
+                무손실 흡수 (레거시 보존)       → docs/design/02-unified-recursion.md
 ```
 
 ## 256 → 새 설계 핵심 변경점
