@@ -154,6 +154,7 @@ class SaveBody(BaseModel):
     title: str = Field(min_length=1)
     body: str = ""
     author: str = Field(min_length=1)
+    space: str = "public"
 
 
 class DraftBody(BaseModel):
@@ -175,31 +176,37 @@ class EndorseBody(BaseModel):
 class AiAnswerBody(BaseModel):
     question: str = Field(min_length=1)
     author: str = Field(min_length=1)
+    space: str = "public"
 
 
 class QueryBody(BaseModel):
     title: str = Field(min_length=1)
     detail: str = ""
     author: str = Field(min_length=1)
+    space: str = "public"
 
 
 class AnswerBody(BaseModel):
     body: str = Field(min_length=1)
     author: str = Field(min_length=1)
     title: str = ""
+    space: str = "public"
 
 
 class ExtractBody(BaseModel):
     slug: str = Field(min_length=1)
+    space: str = "public"
 
 
 class ContribBody(BaseModel):
     kind: str = "comment"  # comment | fork | followup
     author: str = Field(min_length=1)
     body: str = ""
+    space: str = "public"
 
 
-def _page_view(svc: WikiService, slug: str, *, full: bool = False) -> dict:
+def _page_view(svc: WikiService, slug: str, *, full: bool = False,
+               space: str = "public") -> dict:
     p = svc.wiki.get(slug)
     view = {
         "slug": p.slug, "title": p.title, "author": p.author,
@@ -207,13 +214,18 @@ def _page_view(svc: WikiService, slug: str, *, full: bool = False) -> dict:
         "is_stub": p.is_stub, "authority": round(svc.wiki.authority_of(p.slug), 4),
         "links": list(p.links), "kind": p.kind, "status": p.status,
         "frozen": p.frozen, "model": p.model, "answered_at": p.answered_at,
+        "space": p.space,
     }
     if full:
         view["body"] = p.body
-        view["contributions"] = list(p.contributions)
+        # contributions are layered too: show public ∪ the viewer's space
+        view["contributions"] = [
+            c for c in p.contributions
+            if c.get("space", "public") in ("public", space)
+        ]
         view["backlinks"] = [
             {"slug": b.slug, "title": b.title, "author": b.author}
-            for b in svc.wiki.backlinks(slug)
+            for b in svc.wiki.backlinks(slug, space)
         ]
         view["linkers"] = svc.wiki.scoring.link_order(slug)
     return view
@@ -250,24 +262,27 @@ def create_app() -> FastAPI:
             }
 
     @app.get("/api/pages")
-    def list_pages():
+    def list_pages(space: str = "public"):
         svc = get_service()
         with svc._lock:
-            return [_page_view(svc, p.slug) for p in svc.wiki.list_pages()]
+            return [_page_view(svc, p.slug, space=space)
+                    for p in svc.wiki.list_pages(space)]
 
     @app.get("/api/search")
-    def search(q: str = ""):
+    def search(q: str = "", space: str = "public"):
         svc = get_service()
         with svc._lock:
-            return [_page_view(svc, p.slug) for p in svc.wiki.search(q)]
+            return [_page_view(svc, p.slug, space=space)
+                    for p in svc.wiki.search(q, space)]
 
     @app.get("/api/pages/{slug}")
-    def get_page(slug: str):
+    def get_page(slug: str, space: str = "public"):
         svc = get_service()
         with svc._lock:
-            if svc.wiki.get(slug) is None:
+            p = svc.wiki.get(slug)
+            if p is None or not svc.wiki._visible(p, space):
                 raise HTTPException(404, f"unknown page {slug!r}")
-            return _page_view(svc, slug, full=True)
+            return _page_view(svc, slug, full=True, space=space)
 
     @app.post("/api/pages")
     def save_page(body: SaveBody):
@@ -279,33 +294,37 @@ def create_app() -> FastAPI:
                     409, "동결된 AI 답변은 직접 수정할 수 없습니다 — 기여(의견/정정/후속질문)로 추가하세요"
                 )
             try:
-                page = svc.wiki.save_page(body.title, body.body, body.author)
+                page = svc.wiki.save_page(body.title, body.body, body.author,
+                                          space=body.space)
             except ValueError as e:
                 raise HTTPException(400, str(e))
             svc.save()
-            return _page_view(svc, page.slug, full=True)
+            return _page_view(svc, page.slug, full=True, space=body.space)
 
     @app.post("/api/pages/{slug}/contribute")
     def contribute(slug: str, body: ContribBody):
         """Append a contribution to a node's thread (instead of editing it).
 
+        The contribution lands in ``body.space`` — a group member commenting on a
+        public node keeps that note in the group layer (one-way membrane).
         kind=followup also generates an AI answer entry below the question.
         """
         svc = get_service()
         with svc._lock:
             page = svc.wiki.get(slug)
-            if page is None or page.is_stub:
+            if page is None or page.is_stub or not svc.wiki._visible(page, body.space):
                 raise HTTPException(404, f"page {slug!r} not found or empty")
             kind = body.kind if body.kind in ("comment", "fork", "followup") else "comment"
-            svc.wiki.add_contribution(slug, kind, body.author, body.body)
+            svc.wiki.add_contribution(slug, kind, body.author, body.body, space=body.space)
             if kind == "followup" and body.body.strip():
                 try:
                     ans = _ai_fn(body.body, "")
                 except Exception:
                     ans = offline_draft(body.body, "")
-                svc.wiki.add_contribution(slug, "answer", "AI", ans, model=_ai_model)
+                svc.wiki.add_contribution(slug, "answer", "AI", ans,
+                                          model=_ai_model, space=body.space)
             svc.save()
-            return _page_view(svc, slug, full=True)
+            return _page_view(svc, slug, full=True, space=body.space)
 
     @app.post("/api/draft")
     def draft(body: DraftBody):
@@ -327,17 +346,18 @@ def create_app() -> FastAPI:
                 text = _ai_fn(body.question, "")
             except Exception:
                 text = offline_draft(body.question, "")
-            page = svc.wiki.save_page(body.question, text, body.author)
+            page = svc.wiki.save_page(body.question, text, body.author, space=body.space)
             svc.wiki.mark_answered(page.slug, _ai_model)  # 모델·날짜 박제(동결)
             svc.save()
-            return _page_view(svc, page.slug, full=True)
+            return _page_view(svc, page.slug, full=True, space=body.space)
 
     @app.get("/api/queries")
-    def list_queries():
+    def list_queries(space: str = "public"):
         """Open public queries awaiting human answers (stage ③ backlog)."""
         svc = get_service()
         with svc._lock:
-            return [_page_view(svc, q.slug) for q in svc.wiki.open_queries()]
+            return [_page_view(svc, q.slug, space=space)
+                    for q in svc.wiki.open_queries(space)]
 
     @app.post("/api/queries")
     def create_query(body: QueryBody):
@@ -345,11 +365,12 @@ def create_app() -> FastAPI:
         svc = get_service()
         with svc._lock:
             try:
-                q = svc.wiki.create_query(body.title, body.detail, body.author)
+                q = svc.wiki.create_query(body.title, body.detail, body.author,
+                                          space=body.space)
             except ValueError as e:
                 raise HTTPException(400, str(e))
             svc.save()
-            return _page_view(svc, q.slug, full=True)
+            return _page_view(svc, q.slug, full=True, space=body.space)
 
     @app.post("/api/queries/{slug}/answer")
     def answer_query(slug: str, body: AnswerBody):
@@ -357,14 +378,15 @@ def create_app() -> FastAPI:
         svc = get_service()
         with svc._lock:
             try:
-                page = svc.wiki.answer_query(slug, body.title, body.body, body.author)
+                page = svc.wiki.answer_query(slug, body.title, body.body,
+                                             body.author, space=body.space)
             except ValueError as e:
                 raise HTTPException(404, str(e))
             svc.save()
-            return _page_view(svc, page.slug, full=True)
+            return _page_view(svc, page.slug, full=True, space=body.space)
 
     @app.get("/api/scores")
-    def scores():
+    def scores(space: str = "public"):
         svc = get_service()
         with svc._lock:
             return {
@@ -372,7 +394,7 @@ def create_app() -> FastAPI:
                 "top_pages": [
                     {"slug": p.slug, "title": p.title, "author": p.author,
                      "authority": round(a, 4)}
-                    for p, a in svc.wiki.top_pages()
+                    for p, a in svc.wiki.top_pages(space=space)
                 ],
                 "top_contributors": [
                     {"user": u, "hub": round(h, 4)}
@@ -381,14 +403,14 @@ def create_app() -> FastAPI:
             }
 
     @app.get("/api/resolve/{title}")
-    def resolve(title: str):
+    def resolve(title: str, space: str = "public"):
         """Map a [[wikilink]] title to its slug + existence (for the UI)."""
         svc = get_service()
         with svc._lock:
             slug = slugify(title)
             p = svc.wiki.get(slug)
-            return {"title": title, "slug": slug,
-                    "exists": p is not None and not p.is_stub}
+            visible = p is not None and not p.is_stub and svc.wiki._visible(p, space)
+            return {"title": title, "slug": slug, "exists": visible}
 
     @app.post("/api/extract")
     def extract(body: ExtractBody):
@@ -400,7 +422,7 @@ def create_app() -> FastAPI:
         svc = get_service()
         with svc._lock:
             page = svc.wiki.get(body.slug)
-            if page is None or page.is_stub:
+            if page is None or page.is_stub or not svc.wiki._visible(page, body.space):
                 raise HTTPException(404, f"page {body.slug!r} not found or empty")
             cached = svc._relcache.get(page.slug)
             if cached and cached[0] == page.updated_at:
@@ -425,23 +447,25 @@ def create_app() -> FastAPI:
             return {"relations": rels, "source": source}
 
     @app.get("/api/graph")
-    def graph():
+    def graph(space: str = "public"):
         svc = get_service()
         with svc._lock:
             w = svc.wiki
+            vis = {p.slug for p in w.pages.values() if w._visible(p, space)}
             nodes = [
                 {
                     "slug": p.slug, "title": p.title,
                     "authority": round(w.authority_of(p.slug), 3),
                     "is_stub": p.is_stub,
                 }
-                for p in w.pages.values()
+                for p in w.pages.values() if p.slug in vis
             ]
             edges = [
                 {"source": p.slug, "target": t}
                 for p in w.pages.values()
+                if p.slug in vis
                 for t in p.links
-                if t in w.pages
+                if t in vis
             ]
             return {"nodes": nodes, "edges": edges}
 

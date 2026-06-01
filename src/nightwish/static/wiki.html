@@ -86,9 +86,12 @@
   <span class="stat">모드 <b id="s-mode">…</b></span>
   <button class="sec" onclick="openGraph()">🕸 그래프</button>
   <span style="margin-left:auto"></span>
+  <span class="stat" title="public=공용 커먼즈, 그 외=그룹 전용 층">공간:</span>
+  <input id="space" value="public" style="width:110px" title="public 또는 그룹 이름"
+         onchange="changeSpace()" />
   <span class="stat">잔액 <b id="s-bal">0</b></span>
   <span class="stat">나:</span>
-  <input id="who" value="Json" style="width:130px" placeholder="내 이름" onchange="refresh()" />
+  <input id="who" value="Json" style="width:120px" placeholder="내 이름" onchange="refresh()" />
 </header>
 
 <div class="grid">
@@ -181,16 +184,24 @@
 <script>
 const $ = id => document.getElementById(id);
 const who = () => $('who').value.trim() || 'anon';
+const space = () => ($('space') && $('space').value.trim()) || 'public';
 let current = null;       // current slug
 let editing = false;
 
 async function api(path, method='GET', body=null){
+  let url='/api'+path;
+  if(method==='GET') url += (path.includes('?')?'&':'?')+'space='+encodeURIComponent(space());
   const opt={method,headers:{'Content-Type':'application/json'}};
-  if(body) opt.body=JSON.stringify(body);
-  const r=await fetch('/api'+path,opt);
+  if(body){ body.space=space(); opt.body=JSON.stringify(body); }  // 현재 공간으로 기록
+  const r=await fetch(url,opt);
   const d=await r.json().catch(()=>({}));
   if(!r.ok) throw new Error(d.detail||r.statusText);
   return d;
+}
+function changeSpace(){
+  // 공간 전환: 현재 보던 문서가 새 공간에서 안 보일 수 있으니 중앙 초기화
+  current=null; $('page').style.display='none'; $('empty').style.display='block';
+  refresh();
 }
 function esc(s){return (s??'').toString().replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 function msg(t,e=false){$('msg').textContent=t;$('msg').className='msg'+(e?' err':'');}

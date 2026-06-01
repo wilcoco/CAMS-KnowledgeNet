@@ -99,6 +99,9 @@ class Page:
     answered_at: str = ""
     #: thread of human (and follow-up AI) contributions layered on this node
     contributions: list = field(default_factory=list)
+    #: layer this node lives in: "public" (commons) or a group id. One-way
+    #: membrane — group nodes may reference public, but never the reverse.
+    space: str = "public"
 
     @property
     def is_stub(self) -> bool:
@@ -122,8 +125,20 @@ class Wiki:
         self._clock += 1
         return self._clock
 
+    # -- visibility (layered: public commons + group overlays) ---------------
+    @staticmethod
+    def _visible(p: "Page", space: str | None) -> bool:
+        """Read composition: a viewer in ``space`` sees public ∪ that space.
+
+        ``space=None`` disables filtering (admin/tests).
+        """
+        return space is None or p.space == "public" or p.space == space
+
     # -- write ----------------------------------------------------------------
-    def save_page(self, title: str, body: str, author: str, *, kind: str = "page") -> Page:
+    def save_page(
+        self, title: str, body: str, author: str, *, kind: str = "page",
+        space: str = "public",
+    ) -> Page:
         """Create or edit a page. Wikilinks drive hub/authority scoring.
 
         A link to a not-yet-existing page auto-creates a **stub** (like Obsidian),
@@ -145,9 +160,10 @@ class Wiki:
                 continue  # ignore self-links
             target_slugs.append(ts)
             if ts not in self.pages:
+                # a new link target becomes a stub in the *linking* page's layer
                 self.pages[ts] = Page(
                     slug=ts, title=t, body="", author=STUB_AUTHOR,
-                    created_at=now, updated_at=now,
+                    created_at=now, updated_at=now, space=space,
                 )
 
         previous_links = set(existing.links) if existing else set()
@@ -155,10 +171,11 @@ class Wiki:
 
         if existing is None or existing.is_stub:
             created = existing.created_at if existing else now
+            sp = existing.space if (existing and not existing.is_stub) else space
             page = Page(
                 slug=slug, title=title, body=body, author=author,
                 created_at=created, updated_at=now, last_editor=author,
-                links=target_slugs, kind=kind,
+                links=target_slugs, kind=kind, space=sp,
             )
         else:
             page = existing
@@ -179,18 +196,21 @@ class Wiki:
         return page
 
     # -- public queries (사람에게 묻기) --------------------------------------
-    def create_query(self, title: str, detail: str, author: str) -> Page:
+    def create_query(
+        self, title: str, detail: str, author: str, *, space: str = "public"
+    ) -> Page:
         """Post an **open public query** — a question search/AI couldn't satisfy.
 
         It is a first-class node: searchable, structurable, and answerable by
         others. This is design §6 stage ③ (route to humans).
         """
-        page = self.save_page(title, detail, author, kind="query")
+        page = self.save_page(title, detail, author, kind="query", space=space)
         page.status = "open"
         return page
 
     def answer_query(
-        self, query_slug: str, title: str, body: str, author: str
+        self, query_slug: str, title: str, body: str, author: str,
+        *, space: str = "public",
     ) -> Page:
         """Answer an open query: create a knowledge page linked to the query,
         then mark the query resolved. The answer becomes searchable content."""
@@ -202,13 +222,14 @@ class Wiki:
         if link not in body:
             body = f"{body}\n\n관련 질의: {link}"
         answer_title = title.strip() or f"{query.title} — 답변"
-        page = self.save_page(answer_title, body, author)
+        page = self.save_page(answer_title, body, author, space=space)
         query.status = "resolved"
         return page
 
-    def open_queries(self) -> list[Page]:
+    def open_queries(self, space: str | None = None) -> list[Page]:
         return [
-            p for p in self.list_pages() if p.is_query and p.status == "open"
+            p for p in self.list_pages(space)
+            if p.is_query and p.status == "open"
         ]
 
     # -- frozen answers + contribution thread --------------------------------
@@ -221,12 +242,15 @@ class Wiki:
         return page
 
     def add_contribution(
-        self, slug: str, kind: str, author: str, body: str, *, model: str = ""
+        self, slug: str, kind: str, author: str, body: str, *, model: str = "",
+        space: str = "public",
     ) -> dict:
         """Append a contribution to a node's thread (no edit of the frozen body).
 
         ``kind`` ∈ comment(의견/보강) · fork(정정/다른 답) · followup(후속질문) ·
         answer(후속질문에 대한 AI 답). Each entry is attributed (who/when/model).
+        The contribution carries its own ``space`` — a group member commenting on
+        a *public* node keeps that comment in the group layer (one-way membrane).
         """
         page = self.pages.get(slug)
         if page is None:
@@ -237,6 +261,7 @@ class Wiki:
             "author": author,
             "body": body,
             "model": model,
+            "space": space,
             "created_at": _now_iso(),
         }
         page.contributions.append(entry)
@@ -250,27 +275,35 @@ class Wiki:
     def get_by_title(self, title: str) -> Page | None:
         return self.pages.get(slugify(title))
 
-    def backlinks(self, slug: str) -> list[Page]:
-        """Pages that link *to* ``slug`` (incoming references)."""
-        return [p for p in self.pages.values() if slug in p.links and p.slug != slug]
+    def backlinks(self, slug: str, space: str | None = None) -> list[Page]:
+        """Pages that link *to* ``slug`` (incoming references), visible to ``space``."""
+        return [
+            p for p in self.pages.values()
+            if slug in p.links and p.slug != slug and self._visible(p, space)
+        ]
 
-    def list_pages(self) -> list[Page]:
-        return sorted(self.pages.values(), key=lambda p: -p.updated_at)
+    def list_pages(self, space: str | None = None) -> list[Page]:
+        return sorted(
+            (p for p in self.pages.values() if self._visible(p, space)),
+            key=lambda p: -p.updated_at,
+        )
 
-    def search(self, query: str, limit: int = 50) -> list[Page]:
+    def search(self, query: str, space: str | None = None, limit: int = 50) -> list[Page]:
         """Ranked lexical search (token overlap + char n-gram + phrase boost).
 
         Order-free and CJK-friendly — "무도장 하이그로시" matches a page titled
         "사출 하이그로시 무도장" even though that exact phrase never appears.
-        (Synonyms/paraphrase still need vector search — a later step.)
+        Filtered to the viewer's layer (public ∪ ``space``).
         """
         q = query.strip()
         if not q:
-            return self.list_pages()
+            return self.list_pages(space)
         ql = q.lower()
         q_tok, q_ng = _tokens(q), _ngrams(q)
         scored: list[tuple[float, Page]] = []
         for p in self.pages.values():
+            if not self._visible(p, space):
+                continue
             t_tok, b_tok = _tokens(p.title), _tokens(p.body)
             t_ng, b_ng = _ngrams(p.title), _ngrams(p.body)
             score = 3.0 * len(q_tok & t_tok) + 1.0 * len(q_tok & b_tok)
@@ -293,10 +326,11 @@ class Wiki:
     def hub_of(self, user: str) -> float:
         return self.scoring.hub_of(user)
 
-    def top_pages(self, n: int = 10) -> list[tuple[Page, float]]:
+    def top_pages(self, n: int = 10, space: str | None = None) -> list[tuple[Page, float]]:
         scored = [
             (p, self.scoring.authority_of(p.slug))
-            for p in self.pages.values() if not p.is_stub
+            for p in self.pages.values()
+            if not p.is_stub and self._visible(p, space)
         ]
         scored.sort(key=lambda pa: -pa[1])
         return [(p, a) for p, a in scored if a > 0][:n]
@@ -325,6 +359,7 @@ class Wiki:
                     "links": list(p.links), "kind": p.kind, "status": p.status,
                     "frozen": p.frozen, "model": p.model,
                     "answered_at": p.answered_at, "contributions": list(p.contributions),
+                    "space": p.space,
                 }
                 for p in self.pages.values()
             ],
@@ -351,6 +386,7 @@ class Wiki:
                 frozen=d.get("frozen", False), model=d.get("model", ""),
                 answered_at=d.get("answered_at", ""),
                 contributions=list(d.get("contributions", [])),
+                space=d.get("space", "public"),
             )
         return wiki
 

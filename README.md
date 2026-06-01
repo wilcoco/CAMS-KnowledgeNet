@@ -25,7 +25,7 @@
 | **동작하는 MVP** | [`src/nightwish/`](src/nightwish/) | 온톨로지 트리 · 허브/권위 엔진 · 포인트 경제 · **검증 닻** · **거버넌스** · 질의 파이프라인 |
 | **HTTP 서비스 + 웹 UI** | [`src/nightwish/service.py`](src/nightwish/service.py) · [`static/`](src/nightwish/static/) | FastAPI 백엔드(질문/포크/기여/스테이킹/배당/검증) + 트리를 보고 조작하는 웹 화면. JSON 스냅샷 영속화([`store.py`](src/nightwish/store.py)) |
 | **기반 특허 분석** | [`docs/patents/`](docs/patents/) | 등록공보 원문 + 1차 출처 대조 분석(서지·청구항·법적상태) |
-| **테스트** | [`tests/`](tests/) | 82개 단위 테스트 (불변식 · 특허 청구항 수치 · 서비스 E2E) |
+| **테스트** | [`tests/`](tests/) | 87개 단위 테스트 (불변식 · 특허 청구항 수치 · 서비스 E2E) |
 | **예제** | [`examples/`](examples/) | 첫 바퀴 시뮬레이션 · 배당 라우팅 · **검증 닻 첫 바퀴(P0)** |
 
 ---
@@ -67,7 +67,7 @@ python examples/dividend_demo.py  # 부가가치-게이트 배당 라우팅 데�
 python examples/verified_wheel.py # [P0] 검증 닻이 배당을 여는 첫 바퀴
 
 pip install -e ".[dev]"           # + pytest, httpx
-python -m pytest -q               # 82개 테스트
+python -m pytest -q               # 87개 테스트
 ```
 
 ### ⭐ MVP — 공유 LLM 위키 (Obsidian + LLM, 사용자 간 공유)
@@ -85,6 +85,8 @@ nightwish-mvp                     # 또는: uvicorn nightwish.mvp:app
 - 상태(위키 + 포인트 경제)는 `$NIGHTWISH_WIKI_DB`(기본 `data/wiki.json`) 단일 스냅샷에 영속화.
 - **그래프 뷰**: 상단 🕸 버튼 → 페이지 연결망 시각화(노드 크기=권위, 클릭 시 이동). API: `GET /api/graph`.
 - **포인트 경제**: 발행(UBI) → 좋은 문서에 **추천(스테이킹)** → 작성자·선행 추천자에게 **배당**(시간가중) + 소각. API: `POST /api/mint` · `POST /api/endorse` · `GET /api/ledger`.
+- **층(layer) 가시성**: 상단 `공간` = `public`(공용 커먼즈) 또는 그룹 이름. 보는 것 = **공용 ∪ 현재 그룹**, 새 글/기여도 현재 공간에 기록. **일방막** — 그룹 콘텐츠는 공용으로 절대 안 샘(공용 노드에 단 그룹 전용 기여도 그 그룹만 봄). 모든 읽기 API에 `?space=` 적용. (시행 보안은 추후 인증/SSO; 그 전엔 자가호스팅/No-AI가 하드 보장)
+- **답변 동결 + 기여 스레드**: AI 답변은 모델·날짜 박제(수정 불가), 변경은 자식 노드(의견/후속질문/정정)로. `POST /api/pages/{slug}/contribute`.
 - **실제 LLM 초안(선택)**: 기본은 오프라인 스텁. `pip install -e ".[llm]"` 후 환경변수
   `NIGHTWISH_ENABLE_LLM=1` + `ANTHROPIC_API_KEY=…` 를 주면 Claude(기본 `claude-opus-4-8`)로 초안 생성. 코드로는 `nightwish.mvp.set_ai(fn)`.
 - **질문 순환(§6)**: 좌측 질문 상자 → ① `GET /api/search`(기존 검증지식) → 없으면 ② `POST /api/ai-answer`(AI가 답→문서화) → 부족하면 ③ `POST /api/queries`(공개 질의) → `POST /api/queries/{slug}/answer`(사람이 답→문서화·질의 해결). **질문·답변·질의가 전부 검색 대상 콘텐츠**가 되어 다음 질문을 더 잘 푼다(↻).
