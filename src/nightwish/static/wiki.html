@@ -74,6 +74,9 @@
   .centry.followup { border-left-color:var(--good); }
   .centry .ch { font-size:11px; color:var(--mut); }
   .centry .cb { margin-top:2px; white-space:pre-wrap; }
+  button.ck { flex:1; opacity:.6; }
+  button.ck.sel { opacity:1; background:var(--acc); color:#0a0c10; }
+  #contrib-input { width:100%; min-height:64px; margin-bottom:6px; }
 </style>
 </head>
 <body>
@@ -122,11 +125,16 @@
       <div id="view" class="view"></div>
       <textarea id="editor" style="display:none"></textarea>
       <div id="thread"></div>
-      <div class="toolbar" id="contrib-bar" style="display:none;margin-top:12px">
-        <span class="ch">기여:</span>
-        <button class="sec" onclick="contribute('comment')">➕ 의견/보강</button>
-        <button class="sec" onclick="contribute('followup')">❓ 후속질문</button>
-        <button class="sec" onclick="contribute('fork')">✏️ 정정/다른 답</button>
+      <div id="contrib-bar" style="display:none;margin-top:14px">
+        <h2 class="sec">✍️ 기여 / 추가 질문</h2>
+        <div style="display:flex;gap:6px;margin-bottom:6px">
+          <button class="sec ck" data-k="comment" onclick="setKind('comment')">💬 의견/보강</button>
+          <button class="sec ck" data-k="followup" onclick="setKind('followup')">❓ 후속질문</button>
+          <button class="sec ck" data-k="fork" onclick="setKind('fork')">✏️ 정정/다른 답</button>
+        </div>
+        <textarea id="contrib-input" placeholder="의견/보강을 적고 등록하세요"></textarea>
+        <button onclick="submitContribution()">등록</button>
+        <span class="msg" id="cmsg"></span>
       </div>
     </div>
   </section>
@@ -286,14 +294,24 @@ function renderThread(items){
       <div class="cb">${render(c.body||'')}</div></div>`;
   }).join('');
 }
-async function contribute(kind){
-  if(!current){ msg('문서를 먼저 선택', true); return; }
-  const label = kind==='followup'?'후속 질문을 입력하세요':(kind==='fork'?'정정/다른 답 (마크다운)':'의견/보강 (마크다운)');
-  const body=prompt(label,''); if(!body) return;
-  try{ const p=await api('/pages/'+current+'/contribute','POST',{kind, author:who(), body});
-    await refresh(); open(current);
-    msg(kind==='followup'?'후속질문 + AI 답 추가됨':'기여 추가됨');
-  }catch(e){ msg(e.message,true); }
+let contribKind='comment';
+const KIND_PLACEHOLDER={comment:'의견/보강을 적고 등록하세요',
+  followup:'후속 질문을 적으세요 — AI가 답을 스레드에 답니다',
+  fork:'정정/다른 답을 적으세요 (원본은 그대로 보존)'};
+function setKind(k){
+  contribKind=k;
+  document.querySelectorAll('#contrib-bar button.ck').forEach(b=>b.classList.toggle('sel', b.dataset.k===k));
+  $('contrib-input').placeholder=KIND_PLACEHOLDER[k];
+}
+async function submitContribution(){
+  if(!current){ msgEl($('cmsg'),'문서를 먼저 선택', true); return; }
+  const body=$('contrib-input').value.trim();
+  if(!body){ msgEl($('cmsg'),'내용을 입력하세요', true); return; }
+  msgEl($('cmsg'), contribKind==='followup'?'AI가 답하는 중…':'등록 중…');
+  try{ await api('/pages/'+current+'/contribute','POST',{kind:contribKind, author:who(), body});
+    $('contrib-input').value=''; await refresh(); await open(current);
+    msgEl($('cmsg'), contribKind==='followup'?'후속질문 + AI 답이 스레드에 추가됨':'기여가 스레드에 추가됨');
+  }catch(e){ msgEl($('cmsg'), e.message, true); }
 }
 async function loadScores(){
   const s=await api('/scores');
@@ -329,7 +347,9 @@ async function open(slug){
     document.querySelectorAll('.toolbar button.sec').forEach(b=>{
       if(b.textContent.includes('AI 초안')) b.style.display = p.frozen?'none':'inline-block';
     });
-    $('contrib-bar').style.display = (p.kind==='query'||p.is_stub) ? 'none' : 'flex';
+    const showContrib = !(p.kind==='query'||p.is_stub);
+    $('contrib-bar').style.display = showContrib ? 'block' : 'none';
+    if(showContrib) setKind('comment');
     renderThread(p.contributions||[]);
     $('backlinks').innerHTML = p.backlinks.length
       ? p.backlinks.map(b=>`<div><button class="link" onclick="open('${b.slug}')">${esc(b.title)}</button> <span class="n">by ${esc(b.author)}</span></div>`).join('')
