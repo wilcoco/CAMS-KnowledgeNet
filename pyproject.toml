@@ -21,6 +21,7 @@ llm = ["anthropic>=0.40"]
 nightwish-firstwheel = "nightwish.simulation:main"
 nightwish-serve = "nightwish.service:main"
 nightwish-mvp = "nightwish.mvp:main"
+nightwish-app = "nightwish.unified:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

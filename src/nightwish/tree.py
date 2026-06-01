@@ -190,6 +190,7 @@ class OntologyTree:
         node.updated_at = self._clock
         if not node.last_editor:
             node.last_editor = node.author
+        previous = set(node.links)
         link_slugs: list[str] = []
         for title in extract_links(node.answer):
             ts = slugify(title)
@@ -203,6 +204,10 @@ class OntologyTree:
                     slug=ts, space=node.space, updated_at=self._clock,
                     last_editor=STUB_AUTHOR,
                 )
+            # Only *newly added* links score, so re-editing a body does not
+            # double-count — order (who linked first) stays meaningful.
+            if ts not in previous and node.author != STUB_AUTHOR:
+                self.scoring.link(node.author, ts, weight=1.0)
         node.links = link_slugs
 
     # -- creation --------------------------------------------------------------
