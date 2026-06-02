@@ -1,5 +1,8 @@
 """End-to-end tests for the unified knowledge-graph HTTP app."""
 
+import threading
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -158,6 +161,39 @@ def test_endorsement_lifts_a_qa_in_search_adoption(client):
 
     hits = client.get("/api/search", params={"q": "용접 결함", "space": "public"}).json()
     assert hits[0]["id"] == a            # the endorsed (adopted) Q&A surfaces first
+
+
+# -- a slow AI generation must not freeze the rest of the app ----------------
+def test_slow_ai_ask_does_not_hold_the_lock(client):
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_ai(question, prompt=""):
+        started.set()
+        release.wait(2.0)          # simulate a multi-second network call
+        return "느린 AI 답변"
+
+    unified.set_ai(slow_ai, model="slow-test")
+    try:
+        result = {}
+        t = threading.Thread(
+            target=lambda: result.update(
+                r=client.post("/api/ask", json={"question": "느린질문", "author": "a"})))
+        t.start()
+        assert started.wait(2.0)   # the AI call is in flight (lock released)
+
+        # the status poll must still respond promptly while AI generates
+        t0 = time.monotonic()
+        assert client.get("/api/state").status_code == 200
+        assert time.monotonic() - t0 < 1.0
+
+        release.set()
+        t.join(3.0)
+        assert result["r"].status_code == 200
+        assert result["r"].json()["node"]["answer"] == "느린 AI 답변"
+    finally:
+        release.set()
+        unified.set_ai(unified.offline_answer, model="offline-stub")
 
 
 # -- the UI can prove whether storage is durable -----------------------------

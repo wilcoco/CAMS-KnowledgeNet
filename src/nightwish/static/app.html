@@ -46,6 +46,18 @@
   .badge.co.evaluator { color:var(--link); border-color:var(--link); }
   .answer { white-space:pre-wrap; background:var(--panel); border:1px solid var(--line);
             border-radius:8px; padding:12px; margin:8px 0; }
+  /* AI busy indicator */
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .spinner { display:inline-block; width:13px; height:13px; vertical-align:-2px;
+             border:2px solid var(--mut); border-top-color:var(--acc);
+             border-radius:50%; animation:spin .8s linear infinite; }
+  #busy { position:fixed; top:0; left:0; right:0; z-index:50; display:none;
+          gap:8px; align-items:center; justify-content:center; padding:7px 12px;
+          background:rgba(122,162,255,.14); border-bottom:1px solid var(--acc);
+          color:var(--fg); font-size:13px; }
+  #busy.on { display:flex; }
+  .inline-busy { color:var(--acc); font-size:12px; }
+  button[disabled] { opacity:.55; cursor:progress; }
   .node-head { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
   .node-head h3 { margin:0; font-size:18px; }
   .prov { color:var(--mut); font-size:12px; }
@@ -69,6 +81,7 @@
 </style>
 </head>
 <body>
+<div id="busy"><span class="spinner"></span> <span id="busy-msg">AI가 답변을 생성하는 중…</span></div>
 <header>
   <h1>업무 지식 정리</h1>
   <span class="stat" id="stat">…</span>
@@ -131,6 +144,27 @@ const api = async (m, url, body) => {
 };
 const space = () => $('#space').value;
 const me = () => $('#me').value.trim() || 'anon';
+
+// Show a "running" banner (and disable a trigger button) while an async — often
+// slow, network-bound AI — action is in flight, so it never looks frozen.
+let busyDepth = 0;
+async function withBusy(msg, fn, btn){
+  busyDepth++;
+  $('#busy-msg').textContent = msg;
+  $('#busy').classList.add('on');
+  let label;
+  if (btn){ label = btn.textContent; btn.disabled = true; btn.textContent = '⏳ ' + label; }
+  const t0 = Date.now();
+  const tick = setInterval(()=>{
+    $('#busy-msg').textContent = `${msg} (${((Date.now()-t0)/1000).toFixed(0)}초)`;
+  }, 1000);
+  try { return await fn(); }
+  finally {
+    clearInterval(tick);
+    if (--busyDepth <= 0){ busyDepth = 0; $('#busy').classList.remove('on'); }
+    if (btn){ btn.disabled = false; btn.textContent = label; }
+  }
+}
 const esc = s => (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 let current = null;
 
@@ -179,8 +213,12 @@ async function doSearch(){
 async function doAsk(){
   const q = $('#search').value.trim();
   if (!q) return;
-  const r = await api('POST','/api/ask',{question:q, author:me(), space:space()});
-  await refreshStat(); renderNode(r.node);
+  try {
+    const r = await withBusy('AI가 답변을 생성하는 중…',
+      ()=> api('POST','/api/ask',{question:q, author:me(), space:space()}),
+      $('#btn-ask'));
+    await refreshStat(); renderNode(r.node);
+  } catch(e){ alert('AI 질문 실패: ' + e.message); }
 }
 
 async function loadQueries(){
@@ -271,10 +309,13 @@ function renderNode(n){
   c.querySelectorAll('button[data-act]').forEach(b =>
     b.onclick = ()=> showReply(b.dataset.id, b.dataset.act));
   if (n.is_query){
-    $('#q-ai').onclick = async ()=>{
-      await api('POST',`/api/queries/${encodeURIComponent(n.id)}/answer`,
-        {author:me(), ai:true, space:space()});
-      await refreshStat(); openNode(n.id);
+    $('#q-ai').onclick = async (ev)=>{
+      try {
+        await withBusy('AI가 답변을 생성하는 중…',
+          ()=> api('POST',`/api/queries/${encodeURIComponent(n.id)}/answer`,
+            {author:me(), ai:true, space:space()}), ev.currentTarget);
+        await refreshStat(); openNode(n.id);
+      } catch(e){ alert('AI 답변 실패: ' + e.message); }
     };
     $('#q-human').onclick = ()=> {
       $('#q-answer').innerHTML =
@@ -312,9 +353,12 @@ function showReply(id, act){
 }
 
 async function submitContrib(id, kind, body){
+  // a follow-up asks the AI for a fresh answer → slow; the rest are instant
+  const msg = kind==='followup' ? 'AI가 후속 답변을 생성하는 중…' : '처리 중…';
   try{
-    await api('POST',`/api/nodes/${encodeURIComponent(id)}/contribute`,
-      {kind, author:me(), body, space:space()});
+    await withBusy(msg,
+      ()=> api('POST',`/api/nodes/${encodeURIComponent(id)}/contribute`,
+        {kind, author:me(), body, space:space()}));
     await refreshStat(); loadScores();
     openNode(current.id);  // re-render whole thread from the root in view
   }catch(e){ alert(e.message); }

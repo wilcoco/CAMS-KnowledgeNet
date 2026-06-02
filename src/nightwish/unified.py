@@ -408,7 +408,16 @@ def create_app() -> FastAPI:
             if answers:
                 return {"stage": "search",
                         "node": _node_view(svc, answers[0].id, body.space, full=True)}
-            text = _ask_ai(body.question)
+        # The AI draft is a (possibly multi-second) network call — do it WITHOUT
+        # holding the lock, so the rest of the app (status poll, other users)
+        # isn't frozen while a generation is in flight.
+        text = _ask_ai(body.question)
+        with svc._lock:
+            # re-check: someone may have answered the same question meanwhile
+            answers = [n for n in svc.tree.search(body.question, body.space) if n.is_answer]
+            if answers:
+                return {"stage": "search",
+                        "node": _node_view(svc, answers[0].id, body.space, full=True)}
             nid = svc._new_id(body.question)
             svc.tree.add_root(nid, body.question, text, body.author, space=body.space)
             svc.tree.mark_answered(nid, _ai_model)
@@ -442,12 +451,17 @@ def create_app() -> FastAPI:
         child, so the answer is itself a slot that can be further refined.
         """
         svc = get_service()
+        kind = body.kind if body.kind in (
+            "comment", "fork", "follow", "followup") else "comment"
+        if kind == "followup" and not body.body.strip():
+            raise HTTPException(400, "후속질문 내용이 필요합니다")
+        # A follow-up's AI answer is a slow network call: do it OUTSIDE the lock
+        # so the app isn't frozen while it generates.
+        ai_text = _ask_ai(body.body) if kind == "followup" else None
         with svc._lock:
             parent = svc.tree.nodes.get(node_id)
             if parent is None or not svc.tree._visible(parent, body.space):
                 raise HTTPException(404, f"node {node_id!r} not found")
-            kind = body.kind if body.kind in (
-                "comment", "fork", "follow", "followup") else "comment"
             try:
                 if kind == "follow":
                     svc.tree.follow(svc._child_id(node_id), node_id, body.author,
@@ -458,14 +472,12 @@ def create_app() -> FastAPI:
                     svc.tree.fork(svc._child_id(node_id), node_id, body.author,
                                   body.body, stake=0.0, space=body.space)
                 elif kind == "followup":
-                    if not body.body.strip():
-                        raise HTTPException(400, "후속질문 내용이 필요합니다")
                     qid = svc._child_id(node_id)
                     svc.tree.contribute(qid, node_id, body.author, answer="",
                                         stake=0.0, question=body.body,
                                         value_add=True, space=body.space)
                     aid = svc._child_id(qid)
-                    svc.tree.contribute(aid, qid, "AI", _ask_ai(body.body),
+                    svc.tree.contribute(aid, qid, "AI", ai_text,
                                         stake=0.0, space=body.space)
                     svc.tree.mark_answered(aid, _ai_model)
                 else:  # comment / 보강
@@ -506,7 +518,12 @@ def create_app() -> FastAPI:
             q = svc.tree.nodes.get(node_id)
             if q is None or not q.is_query:
                 raise HTTPException(404, f"open query {node_id!r} not found")
-            text = _ask_ai(q.question) if body.ai else body.body
+            question = q.question
+        # AI generation is a slow network call — outside the lock.
+        text = _ask_ai(question) if body.ai else body.body
+        with svc._lock:
+            if node_id not in svc.tree.nodes:
+                raise HTTPException(404, f"open query {node_id!r} not found")
             if not text.strip():
                 raise HTTPException(400, "답변 내용이 필요합니다")
             try:
