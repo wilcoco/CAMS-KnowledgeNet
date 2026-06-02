@@ -34,6 +34,23 @@ def test_ask_misses_then_ai_answers_a_frozen_node(client):
     assert again["node"]["id"] == node["id"]
 
 
+def test_a_different_question_is_not_answered_by_an_old_one(client):
+    """Regression: loose keyword search must not make a *new* question return an
+    unrelated old answer just because they share a common token like 방법/온도."""
+    first = client.post("/api/ask",
+                        json={"question": "도장 없는 컬러 범퍼 생산 방법", "author": "a"}).json()
+    # different topic, only the token '방법' overlaps → must generate fresh
+    other = client.post("/api/ask",
+                        json={"question": "사출 불량률 줄이는 방법", "author": "b"}).json()
+    assert other["stage"] == "ai"
+    assert other["node"]["id"] != first["node"]["id"]
+
+    # only-token overlap ('온도') must also generate fresh, not reuse
+    client.post("/api/ask", json={"question": "열처리 온도는 몇 도", "author": "c"})
+    t = client.post("/api/ask", json={"question": "사출 성형 온도 설정", "author": "d"}).json()
+    assert t["stage"] == "ai"
+
+
 # -- the SAME module applies to every slot, recursively ----------------------
 def test_recursive_thread_followup_answer_is_itself_a_slot(client):
     nid = client.post("/api/ask", json={"question": "Q루트", "author": "a"}).json()["node"]["id"]

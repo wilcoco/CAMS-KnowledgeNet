@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Callable, Optional
@@ -80,6 +81,41 @@ def _ask_ai(question: str, prompt: str = "") -> str:
         return _ai_fn(question, prompt)
     except Exception:
         return offline_answer(question, prompt)
+
+
+#: How close an existing question must be to *reuse* its answer instead of
+#: generating a fresh one. The loose keyword search is right for browsing but
+#: far too eager here — sharing a common token like "방법"/"온도" must NOT make a
+#: new question silently return an old, unrelated answer. Require a strong
+#: token-overlap (Jaccard) so only the *same* question is reused.
+_REUSE_SIMILARITY = 0.7
+
+
+def _qtokens(s: str) -> set[str]:
+    return {t for t in re.split(r"[^0-9a-z가-힣]+", s.lower()) if t}
+
+
+def _reusable_answer(svc: "UnifiedService", question: str, space: str):
+    """The existing answer node that genuinely answers ``question``, or None.
+
+    A hit must be the *same question* (high token overlap), not merely a
+    keyword-search neighbour — otherwise asking something new returns an old
+    answer and "the next question doesn't work".
+    """
+    qt = _qtokens(question)
+    if not qt:
+        return None
+    best, best_sim = None, 0.0
+    for n in svc.tree.search(question, space):
+        if not n.is_answer:
+            continue
+        nt = _qtokens(n.question)
+        if not nt:
+            continue
+        sim = len(qt & nt) / len(qt | nt)
+        if sim > best_sim:
+            best, best_sim = n, sim
+    return best if best_sim >= _REUSE_SIMILARITY else None
 
 
 # --------------------------------------------------------------------------- #
@@ -403,21 +439,20 @@ def create_app() -> FastAPI:
         """
         svc = get_service()
         with svc._lock:
-            hits = svc.tree.search(body.question, body.space)
-            answers = [n for n in hits if n.is_answer]
-            if answers:
+            hit = _reusable_answer(svc, body.question, body.space)
+            if hit is not None:
                 return {"stage": "search",
-                        "node": _node_view(svc, answers[0].id, body.space, full=True)}
+                        "node": _node_view(svc, hit.id, body.space, full=True)}
         # The AI draft is a (possibly multi-second) network call — do it WITHOUT
         # holding the lock, so the rest of the app (status poll, other users)
         # isn't frozen while a generation is in flight.
         text = _ask_ai(body.question)
         with svc._lock:
             # re-check: someone may have answered the same question meanwhile
-            answers = [n for n in svc.tree.search(body.question, body.space) if n.is_answer]
-            if answers:
+            hit = _reusable_answer(svc, body.question, body.space)
+            if hit is not None:
                 return {"stage": "search",
-                        "node": _node_view(svc, answers[0].id, body.space, full=True)}
+                        "node": _node_view(svc, hit.id, body.space, full=True)}
             nid = svc._new_id(body.question)
             svc.tree.add_root(nid, body.question, text, body.author, space=body.space)
             svc.tree.mark_answered(nid, _ai_model)
