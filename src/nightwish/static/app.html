@@ -354,14 +354,15 @@ function renderNode(n){
 }
 
 function showReply(id, act){
-  const box = $('#reply-'+id);
+  // getElementById (not querySelector) — ids can contain ::, ~, . which break CSS selectors
+  const box = document.getElementById('reply-'+id);
   if (act === 'follow'){ submitContrib(id, 'follow', ''); return; }
   const ph = {comment:'보강할 의견', fork:'정정 또는 다른 답', followup:'후속 질문'}[act];
-  box.innerHTML = `<textarea id="rt-${id}" placeholder="${ph}"></textarea>
-    <div class="row"><button data-go="${id}" data-act="${act}">보내기</button>
-      <button class="sec" data-cancel="${id}">취소</button></div>`;
+  box.innerHTML = `<textarea placeholder="${ph}"></textarea>
+    <div class="row"><button data-go>보내기</button>
+      <button class="sec" data-cancel>취소</button></div>`;
   box.querySelector('[data-go]').onclick = ()=>
-    submitContrib(id, act, $('#rt-'+id).value);
+    submitContrib(id, act, box.querySelector('textarea').value);
   box.querySelector('[data-cancel]').onclick = ()=> box.innerHTML='';
 }
 
