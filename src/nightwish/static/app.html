@@ -357,21 +357,22 @@ function showReply(id, act){
   // getElementById (not querySelector) — ids can contain ::, ~, . which break CSS selectors
   const box = document.getElementById('reply-'+id);
   const ph = {comment:'보강할 의견', fork:'정정 또는 다른 답', followup:'후속 질문'}[act];
+  const goLabel = act==='followup' ? 'AI에게 묻기' : '보내기';
   box.innerHTML = `<textarea placeholder="${ph}"></textarea>
-    <div class="row"><button data-go>보내기</button>
+    <div class="row"><button data-go>${goLabel}</button>
       <button class="sec" data-cancel>취소</button></div>`;
-  box.querySelector('[data-go]').onclick = ()=>
-    submitContrib(id, act, box.querySelector('textarea').value);
+  const goBtn = box.querySelector('[data-go]');
+  goBtn.onclick = ()=> submitContrib(id, act, box.querySelector('textarea').value, goBtn);
   box.querySelector('[data-cancel]').onclick = ()=> box.innerHTML='';
 }
 
-async function submitContrib(id, kind, body){
+async function submitContrib(id, kind, body, btn){
   // a follow-up asks the AI for a fresh answer → slow; the rest are instant
   const msg = kind==='followup' ? 'AI가 후속 답변을 생성하는 중…' : '처리 중…';
   try{
     await withBusy(msg,
       ()=> api('POST',`/api/nodes/${encodeURIComponent(id)}/contribute`,
-        {kind, author:me(), body, space:space()}));
+        {kind, author:me(), body, space:space()}), btn);
     await refreshStat(); loadScores();
     openNode(current.id);  // re-render whole thread from the root in view
   }catch(e){ alert(e.message); }
