@@ -1,5 +1,6 @@
 """End-to-end tests for the unified knowledge-graph HTTP app."""
 
+import contextlib
 import threading
 import time
 
@@ -7,6 +8,27 @@ import pytest
 from fastapi.testclient import TestClient
 
 from nightwish import unified
+
+
+def fake_db(monkeypatch, store):
+    """Patch nightwish.db to an in-memory single-row store (no Postgres).
+
+    Mirrors the real module: ``load``/``save`` plus the atomic ``transaction``
+    read-modify-write that the service now uses for every mutation.
+    """
+    from nightwish import db
+
+    @contextlib.contextmanager
+    def transaction(url):
+        box = {"data": store.get(1)}
+        yield box
+        store[1] = box["data"]
+
+    monkeypatch.setattr(db, "database_url", lambda: "postgres://fake")
+    monkeypatch.setattr(db, "init", lambda url: None)
+    monkeypatch.setattr(db, "load", lambda url: store.get(1))
+    monkeypatch.setattr(db, "save", lambda url, data: store.__setitem__(1, data))
+    monkeypatch.setattr(db, "transaction", transaction)
 
 
 @pytest.fixture()
@@ -214,9 +236,7 @@ def test_state_reports_persistence_backend(client, monkeypatch):
     p = client.get("/api/state").json()["persistence"]
     assert p["backend"] == "file" and p["durable"] is False
 
-    from nightwish import db
-    monkeypatch.setattr(db, "database_url", lambda: "postgres://fake")
-    monkeypatch.setattr(db, "load", lambda url: {"tree": {}, "econ": {}})
+    fake_db(monkeypatch, {})
     p2 = client.get("/api/state").json()["persistence"]
     assert p2["backend"] == "postgres" and p2["durable"] is True and p2["db_ok"]
 
@@ -241,13 +261,8 @@ def test_durable_db_survives_an_ephemeral_disk_restart(monkeypatch, tmp_path):
     node the browser still showed. With DATABASE_URL set, the snapshot must go
     to (and reload from) the DB even though the file path no longer exists.
     """
-    from nightwish import db
-
     store: dict = {}
-    monkeypatch.setattr(db, "database_url", lambda: "postgres://fake")
-    monkeypatch.setattr(db, "init", lambda url: None)
-    monkeypatch.setattr(db, "load", lambda url: store.get(1))
-    monkeypatch.setattr(db, "save", lambda url, data: store.__setitem__(1, data))
+    fake_db(monkeypatch, store)
 
     gone = str(tmp_path / "ephemeral" / "app.json")  # never written in DB mode
     unified.reset_service(unified.UnifiedService(gone))
@@ -269,4 +284,35 @@ def test_durable_db_survives_an_ephemeral_disk_restart(monkeypatch, tmp_path):
                            json={"kind": "followup", "author": "me", "body": "열처리 온도?"})
         assert followup.status_code == 200
         assert len(followup.json()["thread"]) == 1
+    unified.reset_service(None)
+
+
+def test_two_instances_sharing_a_db_do_not_clobber(monkeypatch):
+    """Two replicas (or a redeploy race) share one snapshot row. A stale instance
+    must NOT erase the other's writes — the "DB에 안 박힌다" bug.
+
+    Both services load the (empty) DB at startup, so each holds a stale in-memory
+    copy. With the fix, every write reloads-mutates-saves atomically, so the
+    second writer builds on the first instead of overwriting it.
+    """
+    store: dict = {}
+    fake_db(monkeypatch, store)
+    a = unified.UnifiedService("ignored-a.json")
+    b = unified.UnifiedService("ignored-b.json")  # both snapshot the empty DB now
+
+    with TestClient(unified.app) as client:
+        # pure-write path (no preceding read) → isolates the read-modify-write
+        unified.reset_service(a)
+        nid_a = client.post("/api/nodes",
+                            json={"title": "문서 A", "body": "본문", "author": "a"}).json()["id"]
+        # B, still holding its empty startup memory, writes next
+        unified.reset_service(b)
+        nid_b = client.post("/api/nodes",
+                            json={"title": "문서 B", "body": "본문", "author": "b"}).json()["id"]
+
+        # neither write clobbered the other — both nodes survive in the shared DB
+        assert client.get(f"/api/nodes/{nid_a}").status_code == 200
+        assert client.get(f"/api/nodes/{nid_b}").status_code == 200
+        unified.reset_service(a)
+        assert client.get(f"/api/nodes/{nid_b}").status_code == 200   # A sees B's too
     unified.reset_service(None)

@@ -19,6 +19,7 @@ Run it::
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import threading
@@ -149,21 +150,60 @@ class UnifiedService:
         econ = WikiEconomy.from_json(data.get("econ", data.get("economy", {})))
         return OntologyTree.from_wiki_json(wiki), econ
 
+    def _snapshot(self) -> dict:
+        return {"schema": "unified-1", "tree": self.tree.to_json(),
+                "econ": self.econ.to_json()}
+
+    def _install(self, data: Optional[dict]) -> None:
+        """Replace in-memory state from a snapshot (or seed if empty)."""
+        if data is None:
+            self.tree, self.econ = self._seed(self.db_path, self.tree.scoring.mode)
+        else:
+            self.tree, self.econ = self._from_data(data)
+
     def save(self) -> None:
         from nightwish import db
 
-        payload = {"schema": "unified-1", "tree": self.tree.to_json(),
-                   "econ": self.econ.to_json()}
         url = db.database_url()
         if url:
-            db.save(url, payload)
+            db.save(url, self._snapshot())
             return
         directory = os.path.dirname(os.path.abspath(self.db_path))
         os.makedirs(directory, exist_ok=True)
         tmp = self.db_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, ensure_ascii=False, indent=2)
+            json.dump(self._snapshot(), fh, ensure_ascii=False, indent=2)
         os.replace(tmp, self.db_path)
+
+    # -- request-scoped state access ------------------------------------------
+    # In DB mode the snapshot — not this process's memory — is the source of
+    # truth, because several instances (or a redeploy race) may share it. Reads
+    # reload the latest; writes reload-mutate-save atomically under a DB lock so
+    # a stale instance can never clobber another's data.
+    @contextlib.contextmanager
+    def reading(self):
+        from nightwish import db
+
+        url = db.database_url()
+        with self._lock:
+            if url:
+                self._install(db.load(url))
+            yield
+
+    @contextlib.contextmanager
+    def writing(self):
+        from nightwish import db
+
+        url = db.database_url()
+        with self._lock:
+            if url:
+                with db.transaction(url) as box:
+                    self._install(box["data"])
+                    yield
+                    box["data"] = self._snapshot()
+            else:
+                yield
+                self.save()
 
     # -- id minting -----------------------------------------------------------
     def persistence_info(self) -> dict:
@@ -358,7 +398,7 @@ def create_app() -> FastAPI:
     @app.get("/api/state")
     def state():
         svc = get_service()
-        with svc._lock:
+        with svc.reading():
             real = [n for n in svc.tree.nodes.values()
                     if n.is_answer and not n.is_stub]
             return {
@@ -372,7 +412,7 @@ def create_app() -> FastAPI:
     @app.get("/api/nodes")
     def list_nodes(space: str = "public"):
         svc = get_service()
-        with svc._lock:
+        with svc.reading():
             return [
                 _node_view(svc, n.id, space)
                 for n in svc.tree.visible_nodes(space)
@@ -382,13 +422,13 @@ def create_app() -> FastAPI:
     @app.get("/api/search")
     def search(q: str = "", space: str = "public"):
         svc = get_service()
-        with svc._lock:
+        with svc.reading():
             return [_node_view(svc, n.id, space) for n in svc.tree.search(q, space)]
 
     @app.get("/api/nodes/{node_id}")
     def get_node(node_id: str, space: str = "public"):
         svc = get_service()
-        with svc._lock:
+        with svc.reading():
             n = svc.tree.nodes.get(node_id)
             if n is None or not svc.tree._visible(n, space):
                 raise HTTPException(404, f"unknown node {node_id!r}")
@@ -403,7 +443,7 @@ def create_app() -> FastAPI:
         기존 답은 응답의 ``related``로 함께 돌려주어 UI가 밑에 보여줄 수 있다.)
         """
         svc = get_service()
-        with svc._lock:
+        with svc.reading():
             related = [_node_view(svc, n.id, body.space)
                        for n in svc.tree.search(body.question, body.space)[:5]
                        if n.is_answer]
@@ -411,11 +451,10 @@ def create_app() -> FastAPI:
         # holding the lock, so the rest of the app (status poll, other users)
         # isn't frozen while a generation is in flight.
         text = _ask_ai(body.question)
-        with svc._lock:
+        with svc.writing():
             nid = svc._new_id(body.question)
             svc.tree.add_root(nid, body.question, text, body.author, space=body.space)
             svc.tree.mark_answered(nid, _ai_model)
-            svc.save()
             return {"stage": "ai",
                     "node": _node_view(svc, nid, body.space, full=True),
                     "related": related}
@@ -424,18 +463,16 @@ def create_app() -> FastAPI:
     def create_node(body: PageBody):
         """Create (or edit) a human-authored knowledge node."""
         svc = get_service()
-        with svc._lock:
+        with svc.writing():
             existing = svc.tree.nodes.get(slugify(body.title))
             if existing is not None and not existing.is_stub:
                 if existing.frozen:
                     raise HTTPException(
                         409, "동결된 AI 답변은 직접 수정할 수 없습니다 — 기여로 추가하세요")
                 svc.tree.edit(existing.id, body.body, body.author)
-                svc.save()
                 return _node_view(svc, existing.id, body.space, full=True)
             nid = slugify(body.title)
             svc.tree.add_root(nid, body.title, body.body, body.author, space=body.space)
-            svc.save()
             return _node_view(svc, nid, body.space, full=True)
 
     @app.post("/api/nodes/{node_id}/contribute")
@@ -453,7 +490,7 @@ def create_app() -> FastAPI:
         # A follow-up's AI answer is a slow network call: do it OUTSIDE the lock
         # so the app isn't frozen while it generates.
         ai_text = _ask_ai(body.body) if kind == "followup" else None
-        with svc._lock:
+        with svc.writing():
             parent = svc.tree.nodes.get(node_id)
             if parent is None or not svc.tree._visible(parent, body.space):
                 raise HTTPException(404, f"node {node_id!r} not found")
@@ -483,40 +520,38 @@ def create_app() -> FastAPI:
                                         space=body.space)
             except OntologyError as e:
                 raise HTTPException(400, str(e))
-            svc.save()
             return _node_view(svc, node_id, body.space, full=True)
 
     @app.get("/api/queries")
     def list_queries(space: str = "public"):
         svc = get_service()
-        with svc._lock:
+        with svc.reading():
             return [_node_view(svc, q.id, space) for q in svc.tree.open_queries(space)]
 
     @app.post("/api/queries")
     def create_query(body: QueryBody):
         svc = get_service()
-        with svc._lock:
+        with svc.writing():
             nid = svc._new_id(body.title)
             q = svc.tree.open_query(nid, body.title, body.author, space=body.space)
             if body.detail.strip():
                 svc.tree.contribute(svc._child_id(nid), nid, body.author,
                                     body.detail, stake=0.0, value_add=False,
                                     space=body.space)
-            svc.save()
             return _node_view(svc, q.id, body.space, full=True)
 
     @app.post("/api/queries/{node_id}/answer")
     def answer_query(node_id: str, body: AnswerBody):
         """Fill an open query in place — by a human, or by the AI (``ai=true``)."""
         svc = get_service()
-        with svc._lock:
+        with svc.reading():
             q = svc.tree.nodes.get(node_id)
             if q is None or not q.is_query:
                 raise HTTPException(404, f"open query {node_id!r} not found")
             question = q.question
         # AI generation is a slow network call — outside the lock.
         text = _ask_ai(question) if body.ai else body.body
-        with svc._lock:
+        with svc.writing():
             if node_id not in svc.tree.nodes:
                 raise HTTPException(404, f"open query {node_id!r} not found")
             if not text.strip():
@@ -526,13 +561,12 @@ def create_app() -> FastAPI:
                                       model=_ai_model if body.ai else "")
             except OntologyError as e:
                 raise HTTPException(400, str(e))
-            svc.save()
             return _node_view(svc, node_id, body.space, full=True)
 
     @app.get("/api/scores")
     def scores(space: str = "public"):
         svc = get_service()
-        with svc._lock:
+        with svc.reading():
             t = svc.tree
             ranked = sorted(
                 ((n, t.scoring.authority_of(n.id))
@@ -556,7 +590,7 @@ def create_app() -> FastAPI:
     @app.get("/api/graph")
     def graph(space: str = "public"):
         svc = get_service()
-        with svc._lock:
+        with svc.reading():
             t = svc.tree
             vis = {n.id for n in t.visible_nodes(space)}
             nodes = [
@@ -575,15 +609,14 @@ def create_app() -> FastAPI:
     @app.post("/api/mint")
     def mint(body: MintBody):
         svc = get_service()
-        with svc._lock:
+        with svc.writing():
             svc.econ.mint(body.account, body.amount)
-            svc.save()
             return {"account": body.account, "balance": svc.econ.balance(body.account)}
 
     @app.post("/api/endorse")
     def endorse(body: EndorseBody):
         svc = get_service()
-        with svc._lock:
+        with svc.writing():
             n = svc.tree.nodes.get(body.node_id)
             if n is None or n.is_stub:
                 raise HTTPException(404, f"node {body.node_id!r} not found or empty")
@@ -603,7 +636,6 @@ def create_app() -> FastAPI:
             first_time = svc.tree.scoring.linker_position(body.account, body.node_id) is None
             if first_time and body.account != n.author:
                 svc.tree.scoring.link(body.account, body.node_id, weight=body.amount)
-            svc.save()
             return {
                 "account": body.account,
                 "balance": round(svc.econ.balance(body.account), 4),
@@ -615,7 +647,7 @@ def create_app() -> FastAPI:
     @app.get("/api/ledger")
     def ledger():
         svc = get_service()
-        with svc._lock:
+        with svc.reading():
             e = svc.econ
             return {
                 "available": {k: round(v, 4) for k, v in e.available.items() if v},

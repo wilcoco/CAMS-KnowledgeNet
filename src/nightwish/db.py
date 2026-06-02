@@ -13,8 +13,13 @@ otherwise the service falls back to a local JSON file. Requires ``psycopg``
 
 from __future__ import annotations
 
+import contextlib
 import os
 from typing import Optional
+
+#: Cross-process advisory-lock key for serialising read-modify-write on the
+#: single snapshot row. Any constant shared by all instances works.
+_LOCK_KEY = 0x4E494748  # "NIGH"
 
 
 def database_url() -> Optional[str]:
@@ -61,3 +66,36 @@ def save(url: str, data: dict) -> None:
             (Jsonb(data),),
         )
         conn.commit()
+
+
+@contextlib.contextmanager
+def transaction(url: str):
+    """Atomic read-modify-write of the snapshot, safe across instances.
+
+    Holds a transaction-scoped advisory lock, reads the current snapshot, and
+    yields a mutable ``box``. The caller reads ``box['data']`` (the latest
+    committed snapshot, or ``None``) and sets ``box['data']`` to the new
+    snapshot; it is written back in the **same** locked transaction. This makes
+    concurrent writers serialise instead of clobbering each other's full-row
+    upsert — the bug where a second instance's stale save erases new data.
+    """
+    from psycopg.types.json import Jsonb
+
+    conn = _connect(url)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_xact_lock(%s)", (_LOCK_KEY,))
+            cur.execute("SELECT data FROM nightwish_state WHERE id = 1")
+            row = cur.fetchone()
+            box = {"data": row[0] if row else None}
+            yield box
+            cur.execute(
+                "INSERT INTO nightwish_state (id, data, updated_at) "
+                "VALUES (1, %s, now()) "
+                "ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, "
+                "updated_at = now()",
+                (Jsonb(box["data"]),),
+            )
+        conn.commit()
+    finally:
+        conn.close()
