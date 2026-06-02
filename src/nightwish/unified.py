@@ -83,6 +83,17 @@ def _ask_ai(question: str, prompt: str = "") -> str:
         return offline_answer(question, prompt)
 
 
+def _ai_status() -> dict:
+    """Whether the real LLM is active — so the UI can show stub vs Claude."""
+    active = _ai_model != "offline-stub"
+    return {
+        "model": _ai_model,
+        "active": active,
+        "hint": "" if active else
+                "오프라인 스텁 — 실제 LLM을 켜려면 NIGHTWISH_ENABLE_LLM=1 + ANTHROPIC_API_KEY",
+    }
+
+
 def _anchor_prompt(tree, node_id: str) -> str:
     """Context for a follow-up: the chain of Q&A from the root down to this node,
     so the AI answers *in the thread* instead of treating it as a fresh question.
@@ -509,7 +520,7 @@ def create_app() -> FastAPI:
             # point query — count rows in SQL, never load the whole graph
             try:
                 c = pgstore.counts(url)
-                return {**c, "persistence": svc.persistence_info()}
+                return {**c, "persistence": svc.persistence_info(), "ai": _ai_status()}
             except Exception:  # noqa: BLE001 — fall back to in-memory below
                 pass
         with svc.reading():
@@ -521,6 +532,7 @@ def create_app() -> FastAPI:
                 "stub_count": sum(1 for n in svc.tree.nodes.values() if n.is_stub),
                 "query_count": len(svc.tree.open_queries()),
                 "persistence": svc.persistence_info(),
+                "ai": _ai_status(),
             }
 
     @app.get("/api/nodes")

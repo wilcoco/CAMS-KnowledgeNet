@@ -186,12 +186,14 @@ async function refreshStat(){
   if (p.backend === 'postgres' && p.db_ok !== false) store = '🟢 DB저장';
   else if (p.backend === 'postgres') store = '🔴 DB오류';
   else store = '🟡 임시(유실위험)';
+  const ai = s.ai || {};
+  const aiTag = ai.active ? `🤖 ${ai.model}` : '🤖 오프라인스텁';
   const el = $('#stat');
   const saved = p.last_saved_at ? ` · 저장 ${p.last_saved_at.slice(0,19)}` : '';
   el.textContent =
-    `노드 ${s.node_count} · 질의 ${s.query_count} · stub ${s.stub_count} · ${s.hub_mode} · ${store}${saved}`;
-  el.title = p.error || p.hint
-    || (p.backend==='postgres' ? `Postgres 영속 · 마지막 저장 ${p.last_saved_at||'?'}` : '');
+    `노드 ${s.node_count} · 질의 ${s.query_count} · ${s.hub_mode} · ${store}${saved} · ${aiTag}`;
+  el.title = [p.error || p.hint || (p.backend==='postgres' ? `Postgres 영속 · 마지막 저장 ${p.last_saved_at||'?'}` : ''),
+              ai.hint].filter(Boolean).join('\n');
 }
 
 function nodeItem(n){
