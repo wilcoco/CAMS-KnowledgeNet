@@ -83,6 +83,30 @@ def _ask_ai(question: str, prompt: str = "") -> str:
         return offline_answer(question, prompt)
 
 
+def _anchor_prompt(tree, node_id: str) -> str:
+    """Context for a follow-up: the chain of Q&A from the root down to this node,
+    so the AI answers *in the thread* instead of treating it as a fresh question.
+    """
+    chain, cur, seen = [], node_id, set()
+    while cur and cur in tree.nodes and cur not in seen:
+        seen.add(cur)
+        chain.append(tree.nodes[cur])
+        cur = tree.nodes[cur].parent_id
+    chain.reverse()
+    parts = []
+    for n in chain:
+        q = (n.question or "").strip()
+        a = (tree.resolved_answer(n.id) or "").strip()
+        if q:
+            parts.append(f"질문: {q}")
+        if a:
+            parts.append(f"답변: {a}")
+    if not parts:
+        return ""
+    return ("아래는 지금까지의 질문·답변 맥락이다. 이 맥락에 이어지는 후속 질문에, "
+            "앞 내용을 전제로 일관되게 답하라.\n\n" + "\n".join(parts))
+
+
 # --------------------------------------------------------------------------- #
 # service: state + persistence                                                #
 # --------------------------------------------------------------------------- #
@@ -591,9 +615,22 @@ def create_app() -> FastAPI:
             "comment", "fork", "follow", "followup") else "comment"
         if kind == "followup" and not body.body.strip():
             raise HTTPException(400, "후속질문 내용이 필요합니다")
-        # A follow-up's AI answer is a slow network call: do it OUTSIDE the lock
-        # so the app isn't frozen while it generates.
-        ai_text = _ask_ai(body.body) if kind == "followup" else None
+        # A follow-up's AI answer is a slow network call: do it OUTSIDE the lock,
+        # but first anchor it to the parent chain's Q&A so it answers *in thread*.
+        ai_text = None
+        if kind == "followup":
+            from nightwish import db, pgstore
+
+            url = db.database_url()
+            if url:
+                snap = pgstore.node_closure(url, node_id)
+                ctx_tree = UnifiedService._from_data(snap)[0] if snap else None
+            else:
+                with svc.reading():
+                    ctx_tree = svc.tree
+            if ctx_tree is None or node_id not in ctx_tree.nodes:
+                raise HTTPException(404, f"node {node_id!r} not found")
+            ai_text = _ask_ai(body.body, _anchor_prompt(ctx_tree, node_id))
         with svc.writing():
             parent = svc.tree.nodes.get(node_id)
             if parent is None or not svc.tree._visible(parent, body.space):

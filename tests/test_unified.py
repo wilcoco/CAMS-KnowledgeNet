@@ -313,6 +313,29 @@ def test_get_node_point_read_equals_full_render(monkeypatch, tmp_path):
     assert any(t["title"] == "두께는?" for t in point["thread"])   # follow-up thread intact
 
 
+def test_followup_ai_is_anchored_to_parent_chain(client):
+    """A follow-up's AI answer must be fed the parent chain's Q&A as context —
+    otherwise it answers the follow-up in isolation (no anchoring)."""
+    captured = {}
+
+    def capturing_ai(question, prompt=""):
+        captured["q"], captured["prompt"] = question, prompt
+        return f"답: {question}"
+
+    unified.set_ai(capturing_ai, model="test")
+    try:
+        nid = client.post("/api/ask",
+                          json={"question": "원질문 ABC", "author": "u"}).json()["node"]["id"]
+        captured.clear()                              # ignore the ask's own AI call
+        client.post(f"/api/nodes/{nid}/contribute",
+                    json={"kind": "followup", "author": "u", "body": "후속 XYZ"})
+        assert captured["q"] == "후속 XYZ"
+        assert "원질문 ABC" in captured["prompt"]      # parent question anchored
+        assert "답: 원질문 ABC" in captured["prompt"]   # parent answer anchored
+    finally:
+        unified.set_ai(unified.offline_answer, model="offline-stub")
+
+
 def test_admin_reset_wipes_everything(client):
     client.post("/api/ask", json={"question": "지울 질문", "author": "a"})
     assert client.get("/api/state").json()["node_count"] >= 1
