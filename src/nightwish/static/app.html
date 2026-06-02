@@ -186,9 +186,11 @@ async function refreshStat(){
   else if (p.backend === 'postgres') store = '🔴 DB오류';
   else store = '🟡 임시(유실위험)';
   const el = $('#stat');
+  const saved = p.last_saved_at ? ` · 저장 ${p.last_saved_at.slice(0,19)}` : '';
   el.textContent =
-    `노드 ${s.node_count} · 질의 ${s.query_count} · stub ${s.stub_count} · ${s.hub_mode} · ${store}`;
-  el.title = p.hint || p.error || (p.backend==='postgres' ? 'Postgres에 영속 저장됨' : '');
+    `노드 ${s.node_count} · 질의 ${s.query_count} · stub ${s.stub_count} · ${s.hub_mode} · ${store}${saved}`;
+  el.title = p.error || p.hint
+    || (p.backend==='postgres' ? `Postgres 영속 · 마지막 저장 ${p.last_saved_at||'?'}` : '');
 }
 
 function nodeItem(n){

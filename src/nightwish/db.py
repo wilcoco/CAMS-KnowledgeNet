@@ -99,3 +99,48 @@ def transaction(url: str):
         conn.commit()
     finally:
         conn.close()
+
+
+def meta(url: str) -> dict:
+    """When the snapshot row was last written — to prove saves are landing."""
+    with _connect(url) as conn, conn.cursor() as cur:
+        cur.execute("SELECT updated_at FROM nightwish_state WHERE id = 1")
+        row = cur.fetchone()
+        return {"exists": bool(row),
+                "updated_at": str(row[0]) if row else None}
+
+
+def selftest(url: str) -> dict:
+    """Prove a real write→commit→read round-trip against this Postgres.
+
+    Writes to a throwaway ``nightwish_probe`` table (never touches real data),
+    commits, then reads it back on a *fresh* connection. If this returns
+    ``ok: true`` the database genuinely accepts writes; if it errors, the
+    message is the exact Postgres failure.
+    """
+    conn = _connect(url)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS nightwish_probe ("
+                " id int PRIMARY KEY, ts timestamptz)"
+            )
+            cur.execute(
+                "INSERT INTO nightwish_probe (id, ts) VALUES (1, now()) "
+                "ON CONFLICT (id) DO UPDATE SET ts = now() RETURNING ts"
+            )
+            wrote = cur.fetchone()[0]
+        conn.commit()
+    finally:
+        conn.close()
+    # read back on a brand-new connection → proves the commit is durable
+    conn2 = _connect(url)
+    try:
+        with conn2.cursor() as cur:
+            cur.execute("SELECT ts FROM nightwish_probe WHERE id = 1")
+            row = cur.fetchone()
+            read = row[0] if row else None
+    finally:
+        conn2.close()
+    return {"ok": read is not None and read == wrote,
+            "wrote_at": str(wrote), "read_back": str(read)}

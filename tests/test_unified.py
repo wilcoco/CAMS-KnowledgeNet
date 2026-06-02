@@ -29,6 +29,7 @@ def fake_db(monkeypatch, store):
     monkeypatch.setattr(db, "load", lambda url: store.get(1))
     monkeypatch.setattr(db, "save", lambda url, data: store.__setitem__(1, data))
     monkeypatch.setattr(db, "transaction", transaction)
+    monkeypatch.setattr(db, "meta", lambda url: {"exists": 1 in store, "updated_at": "2026-06-02T00:00:00+00:00"})
 
 
 @pytest.fixture()
@@ -231,6 +232,11 @@ def test_slow_ai_ask_does_not_hold_the_lock(client):
 
 
 # -- the UI can prove whether storage is durable -----------------------------
+def test_dbcheck_reports_file_mode_without_db(client):
+    r = client.get("/api/dbcheck").json()
+    assert r["backend"] == "file" and r["durable"] is False
+
+
 def test_state_reports_persistence_backend(client, monkeypatch):
     # default test env has no DATABASE_URL → file mode, flagged non-durable
     p = client.get("/api/state").json()["persistence"]

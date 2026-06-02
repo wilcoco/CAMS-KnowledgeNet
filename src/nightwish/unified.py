@@ -225,6 +225,7 @@ class UnifiedService:
             snap = db.load(url)
             info["db_has_snapshot"] = snap is not None
             info["db_ok"] = True
+            info["last_saved_at"] = db.meta(url).get("updated_at")
         except Exception as e:  # noqa: BLE001 — report, don't crash the page
             info.update(durable=False, db_ok=False, error=str(e))
         return info
@@ -394,6 +395,29 @@ def create_app() -> FastAPI:
     @app.get("/api/health")
     def health():
         return {"status": "ok"}
+
+    @app.get("/api/dbcheck")
+    def dbcheck():
+        """Prove writes actually reach Postgres — write a probe, read it back.
+
+        Open this URL in a browser: ``ok: true`` with a fresh ``wrote_at`` means
+        the DB accepts writes (so any data loss is a deploy/config issue, not the
+        DB). An ``error`` is the exact Postgres failure. In file mode it reports
+        that no durable DB is configured.
+        """
+        from nightwish import db
+
+        url = db.database_url()
+        if not url:
+            return {"backend": "file", "durable": False,
+                    "hint": "DATABASE_URL 미설정 — 영속 DB 없음(임시 파일)"}
+        try:
+            result = db.selftest(url)
+            result["backend"] = "postgres"
+            result["last_saved_at"] = db.meta(url).get("updated_at")
+            return result
+        except Exception as e:  # noqa: BLE001 — surface the real reason
+            return {"backend": "postgres", "ok": False, "error": str(e)}
 
     @app.get("/api/state")
     def state():
