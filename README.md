@@ -119,9 +119,14 @@ nightwish-mvp                     # 또는: uvicorn nightwish.mvp:app
 
 **Railway 배포:** 이 저장소를 Railway에 연결하면 [`nixpacks.toml`](nixpacks.toml)이
 `0.0.0.0:$PORT`로 **`nightwish.unified:app`**(통합 앱)을 띄운다. **브랜치별로 서비스를
-따로 두면** 각 브랜치가 독립 배포·독립 URL을 가진다. 상태 유지는 Railway Volume을
-마운트하고 `NIGHTWISH_APP_DB=/data/app.json` 로 지정(기존 `wiki.json` 볼륨이 있으면
-자동 이관). MVP만 따로 띄우려면 start 커맨드를 `nightwish.mvp:app`으로 바꾼다.
+따로 두면** 각 브랜치가 독립 배포·독립 URL을 가진다. MVP만 따로 띄우려면 start
+커맨드를 `nightwish.mvp:app`으로 바꾼다.
+
+> **영속성(중요):** 통합 앱은 `DATABASE_URL`(Railway Postgres)이 있으면 **Postgres
+> 단일행 스냅샷**에 저장해 재시작·재배포에도 데이터가 살아남는다. 없으면 임시
+> 파일로 폴백 → **컨테이너 재시작 시 유실**. 상단 상태줄의 🟢 DB저장 / 🟡 임시 /
+> 🔴 DB오류 표시와 `GET /api/state` 의 `persistence` 로 어느 모드인지 확인할 수
+> 있다. 배포·복구 절차와 환경변수는 [`docs/operations.md`](docs/operations.md) 참고.
 
 ### 서비스 실행 (온톨로지 엔진 데모 — HTTP API + 웹 UI) *(레거시)*
 
