@@ -255,11 +255,21 @@ function threadHTML(list){
                  contribute: c.title ? '후속질문' : '기여', root:'답'}[c.kind] || c.kind;
     const frozen = c.frozen ? ' <span class="badge frozen">AI</span>' : '';
     const title = c.title ? `<div class="who"><b>${esc(c.title)}</b></div>` : '';
+    // 답(내용 있거나 AI 답)인 항목은 평가 가능 — 질문만 있는 후속질문 노드는 제외
+    const canEval = (c.body && c.body.trim()) || c.frozen;
+    const evalCtrl = canEval ? `
+      <div class="row eval-row">
+        <input class="eval-amt" type="number" value="10" style="width:64px"/>
+        <button class="sec eval-btn" data-eid="${esc(c.id)}"
+          title="이 답에 동의·스테이크하고 배당받기 (평가=저작)">평가</button>
+        <span class="prov eval-out">· 스테이크 ${c.staked}</span>
+      </div>` : '';
     return `<div class="c ${cls}">
       <div class="who"><span class="kind-tag">${tag}</span> · ${esc(c.author)}${frozen}
         · 권위 ${c.authority}</div>
       ${title}
       <div class="body">${renderText(c.body)}</div>
+      ${evalCtrl}
       ${actbar(c.id)}
       <div class="reply" id="reply-${c.id}"></div>
       ${threadHTML(c.replies)}
@@ -275,7 +285,7 @@ function actbar(id){
   </div>`;
 }
 
-// 평가 = 저작: 원저자 + 평가(인도스)로 이 지식을 자기 것으로 인정한 사람들
+// 평가 = 저작: 원저자 + 평가로 이 지식을 자기 것으로 인정한 사람들
 function coauthorsHTML(list){
   if (!list || !list.length) return '';
   const chips = list.map(a => {
@@ -298,7 +308,7 @@ function renderNode(n){
     <div id="q-answer"></div>` : '';
   const endorse = (!n.is_query && !n.is_stub) ? `
     <div class="row"><input id="end-amt" type="number" value="10" style="width:80px"/>
-      <button id="btn-endorse" class="sec">인도스(스테이크+배당)</button>
+      <button id="btn-endorse" class="sec" title="이 답에 동의·스테이크하고 배당받기 (평가=저작)">평가 (스테이크+배당)</button>
       <span class="prov" id="end-out"></span></div>` : '';
   c.innerHTML = `
     <div class="node-head">
@@ -321,6 +331,19 @@ function renderNode(n){
   wireLinks(c);
   c.querySelectorAll('button[data-act]').forEach(b =>
     b.onclick = ()=> showReply(b.dataset.id, b.dataset.act));
+  // 스레드 안 모든 답(후속 답 포함)의 평가 버튼
+  c.querySelectorAll('.eval-btn').forEach(b =>
+    b.onclick = async ()=>{
+      const row = b.closest('.eval-row');
+      const out = row.querySelector('.eval-out');
+      try{
+        const r = await withBusy('평가 처리 중…',
+          ()=> api('POST','/api/endorse',
+            {account:me(), node_id:b.dataset.eid, amount:Number(row.querySelector('.eval-amt').value)}), b);
+        out.textContent = `잔액 ${r.balance} · 배당 ${JSON.stringify(r.payouts)}`;
+        loadLedger(); loadScores(); openNode(current.id);
+      }catch(e){ out.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+    });
   if (n.is_query){
     $('#q-ai').onclick = async (ev)=>{
       try {
