@@ -11,25 +11,43 @@ from nightwish import unified
 
 
 def fake_db(monkeypatch, store):
-    """Patch nightwish.db to an in-memory single-row store (no Postgres).
+    """Patch persistence to an in-memory snapshot store (no Postgres).
 
-    Mirrors the real module: ``load``/``save`` plus the atomic ``transaction``
-    read-modify-write that the service now uses for every mutation.
+    The service uses :mod:`nightwish.pgstore` (normalized) in DB mode; the
+    snapshot↔rows round-trip is tested separately in ``test_pgstore.py``, so here
+    we mock at the snapshot level. ``store['snap']`` holds the current snapshot.
     """
-    from nightwish import db
+    from nightwish import db, pgstore
 
     @contextlib.contextmanager
     def transaction(url):
-        box = {"data": store.get(1)}
+        box = {"data": store.get("snap")}
         yield box
-        store[1] = box["data"]
+        store["snap"] = box["data"]
 
+    def counts(url):
+        snap = store.get("snap") or {"tree": {"nodes": [], "scoring": {"mode": "harmonic"}}}
+        nodes = snap["tree"]["nodes"]
+        stub = lambda n: n.get("action") == "stub" or (
+            n.get("author") == "(stub)" and not n.get("answer"))
+        real = [n for n in nodes
+                if n.get("action") not in ("pointer", "query", "stub") and not stub(n)]
+        return {"node_count": len(real),
+                "query_count": sum(1 for n in nodes if n.get("action") == "query"),
+                "stub_count": sum(1 for n in nodes if stub(n)),
+                "hub_mode": snap["tree"]["scoring"].get("mode", "harmonic")}
+
+    # DB-mode is selected by db.database_url(); migration probes db.load (→ none)
     monkeypatch.setattr(db, "database_url", lambda: "postgres://fake")
     monkeypatch.setattr(db, "init", lambda url: None)
-    monkeypatch.setattr(db, "load", lambda url: store.get(1))
-    monkeypatch.setattr(db, "save", lambda url, data: store.__setitem__(1, data))
-    monkeypatch.setattr(db, "transaction", transaction)
-    monkeypatch.setattr(db, "meta", lambda url: {"exists": 1 in store, "updated_at": "2026-06-02T00:00:00+00:00"})
+    monkeypatch.setattr(db, "load", lambda url: None)
+    monkeypatch.setattr(pgstore, "init", lambda url: None)
+    monkeypatch.setattr(pgstore, "load", lambda url: store.get("snap"))
+    monkeypatch.setattr(pgstore, "save", lambda url, snap: store.__setitem__("snap", snap))
+    monkeypatch.setattr(pgstore, "transaction", transaction)
+    monkeypatch.setattr(pgstore, "counts", counts)
+    monkeypatch.setattr(pgstore, "meta_info",
+                        lambda url: {"updated_at": "2026-06-02T00:00:00+00:00"})
 
 
 @pytest.fixture()
@@ -244,7 +262,7 @@ def test_state_reports_persistence_backend(client, monkeypatch):
 
     fake_db(monkeypatch, {})
     p2 = client.get("/api/state").json()["persistence"]
-    assert p2["backend"] == "postgres" and p2["durable"] is True and p2["db_ok"]
+    assert p2["backend"].startswith("postgres") and p2["durable"] is True and p2["db_ok"]
 
 
 # -- persistence round-trips the whole unified snapshot ----------------------
@@ -276,7 +294,7 @@ def test_durable_db_survives_an_ephemeral_disk_restart(monkeypatch, tmp_path):
         nid = c.post("/api/ask", json={"question": "도장 없는 범퍼", "author": "me"}).json()["node"]["id"]
         c.post("/api/mint", json={"account": "me", "amount": 100})
 
-    assert 1 in store                       # persisted to the DB, not the file
+    assert "snap" in store                  # persisted to the DB, not the file
     import os
     assert not os.path.exists(gone)         # the ephemeral file was never created
 

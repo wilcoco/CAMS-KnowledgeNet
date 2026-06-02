@@ -30,6 +30,7 @@
 | AI 질문이 멈춘 듯 | 느린 LLM 호출이 전역 락 점유 + 진행표시 없음 | AI 호출을 락 밖으로, "AI 생성 중…" 배너 | `c2fd9d5` |
 | 새 질문에 옛 답이 나옴 | `ask` 검색-우선이 느슨한 부분일치로 오매칭 | (1차) 강한 매칭만 재사용 → (확정) 항상 새로 생성 | `664d489`, `fd0bcbc` |
 | DB에 안 박힘(글·인도스 사라짐) | 서비스가 DB를 시작 시 1회만 읽고 메모리만 신뢰 → 인스턴스 2개/재배포 경합 시 옛 상태가 단일 스냅샷 행을 덮어씀(clobber) | DB 모드에서 읽기=매 요청 최신 재로딩, 쓰기=Postgres advisory lock으로 read-modify-write 원자화(`db.transaction`, `svc.reading/writing`) | (이 세션) |
+| "한 행에 다 들어감 / 질의마다 전체를 읽음" (정당한 비판) | 전체 상태를 단일 JSONB 블롭으로 저장 → 진짜 DB 설계가 아님 | **정규화 스키마**(`pgstore.py`): node·link·linker·stake·endorser·hub·authority·balance·meta 각 테이블. 스냅샷↔행 변환을 순수함수로 분리해 **무손실 왕복 테스트**. 블롭→정규화 자동 이관(원본 보존). `/api/state`는 SQL COUNT 점-조회 | (이 세션) |
 
 ### 미해결 / 다음 후보
 

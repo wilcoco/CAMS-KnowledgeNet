@@ -16,6 +16,32 @@
 핵심: **`DATABASE_URL`이 앱에 연결돼 있어야 데이터가 산다.** 상태줄 🟢/🟡/🔴 또는
 `GET /api/state` → `persistence` 로 확인.
 
+### 스키마 (정규화 — 1행 = 1개체)
+
+운영 데이터는 **정규화 테이블**에 들어간다(`pgstore.py`). 노드 하나가 한 행이고
+SQL로 조회·인덱싱된다.
+
+| 테이블 | 내용 |
+|--------|------|
+| `node` | 노드 1개당 1행 (질문·답·author·last_editor·action·space·parent_id…). `id`/`author`/`space`/`parent_id` 인덱스 |
+| `node_link` | 위키링크 `[[제목]]` (node→target) |
+| `linker` | 평가=저작 순서 (node→evaluator) — 먼저 평가한 사람 우선 |
+| `node_authority` / `user_hub` | 노드 권위 / 사용자 안목(hub) |
+| `stake` / `endorser` | 노드별 스테이크 / 인도스 순서 |
+| `balance` | 계정별 잔액 |
+| `meta` | 스칼라(clock·rates·mode·`saved_at`…) |
+
+> 옛 단일행 블롭(`nightwish_state`)은 첫 부팅 때 위 테이블로 **자동 이관**되고
+> 원본은 롤백용으로 남는다. `nightwish_probe`는 `/api/dbcheck` 진단용.
+
+조회 예:
+```sql
+SELECT id, author, question FROM node WHERE author = 'Json';   -- 인덱스 조회
+SELECT node_id, evaluator FROM linker ORDER BY node_id, ord;   -- 누가 평가(저작)했나
+SELECT account, value FROM user_hub ORDER BY value DESC;        -- 안목 순위
+SELECT count(*) FROM node;                                      -- 노드 수
+```
+
 ## 2. 환경변수
 
 | 변수 | 용도 | 없으면 |

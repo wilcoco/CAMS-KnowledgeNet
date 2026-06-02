@@ -105,16 +105,23 @@ class UnifiedService:
         # the browser still shows). So persist to Postgres when available,
         # exactly like ``nightwish-mvp`` does, and fall back to a local file
         # only for offline/dev runs.
-        from nightwish import db
+        from nightwish import db, pgstore
 
         url = db.database_url()
         if url:
-            db.init(url)
-            snapshot = db.load(url)
+            pgstore.init(url)
+            snapshot = pgstore.load(url)
+            if snapshot is None:
+                # One-time migration: if the old single-row JSONB blob exists,
+                # fan it out into the normalized tables (the blob is left intact
+                # for rollback). Otherwise seed fresh.
+                db.init(url)
+                blob = db.load(url)
+                if blob is not None:
+                    pgstore.save(url, blob)
+                    snapshot = pgstore.load(url)
             if snapshot is not None:
                 return UnifiedService._from_data(snapshot)
-            # First boot on a fresh DB: seed from a legacy snapshot if one is
-            # reachable (local files), so the cutover doesn't start empty.
             return UnifiedService._seed(path, hub_mode)
         if os.path.exists(path):
             return UnifiedService._from_file(path)
@@ -162,11 +169,11 @@ class UnifiedService:
             self.tree, self.econ = self._from_data(data)
 
     def save(self) -> None:
-        from nightwish import db
+        from nightwish import db, pgstore
 
         url = db.database_url()
         if url:
-            db.save(url, self._snapshot())
+            pgstore.save(url, self._snapshot())
             return
         directory = os.path.dirname(os.path.abspath(self.db_path))
         os.makedirs(directory, exist_ok=True)
@@ -182,22 +189,22 @@ class UnifiedService:
     # a stale instance can never clobber another's data.
     @contextlib.contextmanager
     def reading(self):
-        from nightwish import db
+        from nightwish import db, pgstore
 
         url = db.database_url()
         with self._lock:
             if url:
-                self._install(db.load(url))
+                self._install(pgstore.load(url))
             yield
 
     @contextlib.contextmanager
     def writing(self):
-        from nightwish import db
+        from nightwish import db, pgstore
 
         url = db.database_url()
         with self._lock:
             if url:
-                with db.transaction(url) as box:
+                with pgstore.transaction(url) as box:
                     self._install(box["data"])
                     yield
                     box["data"] = self._snapshot()
@@ -214,18 +221,16 @@ class UnifiedService:
         we also ping the DB so a misconfigured/unreachable Postgres surfaces as
         an explicit error instead of silent data loss.
         """
-        from nightwish import db
+        from nightwish import db, pgstore
 
         url = db.database_url()
         if not url:
             return {"backend": "file", "durable": False, "path": self.db_path,
                     "hint": "DATABASE_URL 미설정 — 임시 파일에 저장, 재시작 시 유실됨"}
-        info = {"backend": "postgres", "durable": True}
+        info = {"backend": "postgres (normalized)", "durable": True}
         try:
-            snap = db.load(url)
-            info["db_has_snapshot"] = snap is not None
+            info["last_saved_at"] = pgstore.meta_info(url).get("updated_at")
             info["db_ok"] = True
-            info["last_saved_at"] = db.meta(url).get("updated_at")
         except Exception as e:  # noqa: BLE001 — report, don't crash the page
             info.update(durable=False, db_ok=False, error=str(e))
         return info
@@ -423,9 +428,12 @@ def create_app() -> FastAPI:
             return {"backend": "file", "durable": False,
                     "hint": "DATABASE_URL 미설정 — 영속 DB 없음(임시 파일)"}
         try:
+            from nightwish import pgstore
+
             result = db.selftest(url)
-            result["backend"] = "postgres"
-            result["last_saved_at"] = db.meta(url).get("updated_at")
+            result["backend"] = "postgres (normalized)"
+            result["last_saved_at"] = pgstore.meta_info(url).get("updated_at")
+            result["row_counts"] = pgstore.counts(url)
             return result
         except Exception as e:  # noqa: BLE001 — surface the real reason
             return {"backend": "postgres", "ok": False, "error": str(e)}
@@ -433,6 +441,16 @@ def create_app() -> FastAPI:
     @app.get("/api/state")
     def state():
         svc = get_service()
+        from nightwish import db, pgstore
+
+        url = db.database_url()
+        if url:
+            # point query — count rows in SQL, never load the whole graph
+            try:
+                c = pgstore.counts(url)
+                return {**c, "persistence": svc.persistence_info()}
+            except Exception:  # noqa: BLE001 — fall back to in-memory below
+                pass
         with svc.reading():
             real = [n for n in svc.tree.nodes.values()
                     if n.is_answer and not n.is_stub]
