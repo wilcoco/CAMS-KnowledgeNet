@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import threading
 from pathlib import Path
 from typing import Callable, Optional
@@ -81,41 +80,6 @@ def _ask_ai(question: str, prompt: str = "") -> str:
         return _ai_fn(question, prompt)
     except Exception:
         return offline_answer(question, prompt)
-
-
-#: How close an existing question must be to *reuse* its answer instead of
-#: generating a fresh one. The loose keyword search is right for browsing but
-#: far too eager here — sharing a common token like "방법"/"온도" must NOT make a
-#: new question silently return an old, unrelated answer. Require a strong
-#: token-overlap (Jaccard) so only the *same* question is reused.
-_REUSE_SIMILARITY = 0.7
-
-
-def _qtokens(s: str) -> set[str]:
-    return {t for t in re.split(r"[^0-9a-z가-힣]+", s.lower()) if t}
-
-
-def _reusable_answer(svc: "UnifiedService", question: str, space: str):
-    """The existing answer node that genuinely answers ``question``, or None.
-
-    A hit must be the *same question* (high token overlap), not merely a
-    keyword-search neighbour — otherwise asking something new returns an old
-    answer and "the next question doesn't work".
-    """
-    qt = _qtokens(question)
-    if not qt:
-        return None
-    best, best_sim = None, 0.0
-    for n in svc.tree.search(question, space):
-        if not n.is_answer:
-            continue
-        nt = _qtokens(n.question)
-        if not nt:
-            continue
-        sim = len(qt & nt) / len(qt | nt)
-        if sim > best_sim:
-            best, best_sim = n, sim
-    return best if best_sim >= _REUSE_SIMILARITY else None
 
 
 # --------------------------------------------------------------------------- #
@@ -432,33 +396,29 @@ def create_app() -> FastAPI:
 
     @app.post("/api/ask")
     def ask(body: AskBody):
-        """The cycle: ① search the existing graph → ② AI answers a fresh node.
+        """Ask the AI. "AI에게 묻기"는 **항상** AI에게 묻는다 — 검색 결과가 따로
+        밑에 떠도, 이 버튼은 늘 새 답을 생성해 새 ROOT 노드로 못박는다.
 
-        A hit returns the existing answer (no new node). A miss mints a new ROOT
-        answer node, frozen with provenance.
+        (기존 지식을 *재사용*하고 싶으면 검색으로 그 노드를 직접 열면 된다. 관련
+        기존 답은 응답의 ``related``로 함께 돌려주어 UI가 밑에 보여줄 수 있다.)
         """
         svc = get_service()
         with svc._lock:
-            hit = _reusable_answer(svc, body.question, body.space)
-            if hit is not None:
-                return {"stage": "search",
-                        "node": _node_view(svc, hit.id, body.space, full=True)}
+            related = [_node_view(svc, n.id, body.space)
+                       for n in svc.tree.search(body.question, body.space)[:5]
+                       if n.is_answer]
         # The AI draft is a (possibly multi-second) network call — do it WITHOUT
         # holding the lock, so the rest of the app (status poll, other users)
         # isn't frozen while a generation is in flight.
         text = _ask_ai(body.question)
         with svc._lock:
-            # re-check: someone may have answered the same question meanwhile
-            hit = _reusable_answer(svc, body.question, body.space)
-            if hit is not None:
-                return {"stage": "search",
-                        "node": _node_view(svc, hit.id, body.space, full=True)}
             nid = svc._new_id(body.question)
             svc.tree.add_root(nid, body.question, text, body.author, space=body.space)
             svc.tree.mark_answered(nid, _ai_model)
             svc.save()
             return {"stage": "ai",
-                    "node": _node_view(svc, nid, body.space, full=True)}
+                    "node": _node_view(svc, nid, body.space, full=True),
+                    "related": related}
 
     @app.post("/api/nodes")
     def create_node(body: PageBody):

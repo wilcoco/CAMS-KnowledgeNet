@@ -217,7 +217,16 @@ async function doAsk(){
     const r = await withBusy('AI가 답변을 생성하는 중…',
       ()=> api('POST','/api/ask',{question:q, author:me(), space:space()}),
       $('#btn-ask'));
-    await refreshStat(); renderNode(r.node);
+    await refreshStat();
+    renderNode(r.node);                 // 항상 새 AI 답을 보여줌
+    // 관련 기존 답이 있으면 밑의 검색 결과 패널에 함께 노출
+    const box = $('#results'); box.innerHTML = '';
+    if (r.related && r.related.length){
+      const h = document.createElement('div');
+      h.className = 'prov'; h.textContent = '관련 기존 답:';
+      box.appendChild(h);
+      r.related.forEach(n => box.appendChild(nodeItem(n)));
+    }
   } catch(e){ alert('AI 질문 실패: ' + e.message); }
 }
 

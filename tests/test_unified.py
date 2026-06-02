@@ -20,7 +20,7 @@ def client(tmp_path):
 
 
 # -- the cycle: search-first ask, then AI mints a frozen node ----------------
-def test_ask_misses_then_ai_answers_a_frozen_node(client):
+def test_ask_always_asks_the_ai_and_mints_a_fresh_node(client):
     r = client.post("/api/ask", json={"question": "사출 불량률 줄이기", "author": "Json"})
     assert r.status_code == 200, r.text
     data = r.json()
@@ -28,27 +28,22 @@ def test_ask_misses_then_ai_answers_a_frozen_node(client):
     node = data["node"]
     assert node["frozen"] and node["model"] == "offline-stub"
 
-    # asking again now hits the existing answer (no new node)
+    # "AI에게 묻기"는 항상 묻는다 — 같은 질문이어도 새 답을 만든다(옛 답 재사용 X).
     again = client.post("/api/ask", json={"question": "사출 불량률 줄이기", "author": "x"}).json()
-    assert again["stage"] == "search"
-    assert again["node"]["id"] == node["id"]
+    assert again["stage"] == "ai"
+    assert again["node"]["id"] != node["id"]
+    # 다만 관련 기존 답은 밑에 보여줄 수 있게 함께 돌려준다
+    assert any(rel["id"] == node["id"] for rel in again["related"])
 
 
-def test_a_different_question_is_not_answered_by_an_old_one(client):
-    """Regression: loose keyword search must not make a *new* question return an
-    unrelated old answer just because they share a common token like 방법/온도."""
+def test_a_different_question_gets_its_own_fresh_answer(client):
+    """A new question must get its own AI answer, never an unrelated old one."""
     first = client.post("/api/ask",
                         json={"question": "도장 없는 컬러 범퍼 생산 방법", "author": "a"}).json()
-    # different topic, only the token '방법' overlaps → must generate fresh
     other = client.post("/api/ask",
                         json={"question": "사출 불량률 줄이는 방법", "author": "b"}).json()
     assert other["stage"] == "ai"
     assert other["node"]["id"] != first["node"]["id"]
-
-    # only-token overlap ('온도') must also generate fresh, not reuse
-    client.post("/api/ask", json={"question": "열처리 온도는 몇 도", "author": "c"})
-    t = client.post("/api/ask", json={"question": "사출 성형 온도 설정", "author": "d"}).json()
-    assert t["stage"] == "ai"
 
 
 # -- the SAME module applies to every slot, recursively ----------------------
