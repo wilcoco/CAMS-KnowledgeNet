@@ -160,6 +160,19 @@ def test_endorsement_lifts_a_qa_in_search_adoption(client):
     assert hits[0]["id"] == a            # the endorsed (adopted) Q&A surfaces first
 
 
+# -- the UI can prove whether storage is durable -----------------------------
+def test_state_reports_persistence_backend(client, monkeypatch):
+    # default test env has no DATABASE_URL → file mode, flagged non-durable
+    p = client.get("/api/state").json()["persistence"]
+    assert p["backend"] == "file" and p["durable"] is False
+
+    from nightwish import db
+    monkeypatch.setattr(db, "database_url", lambda: "postgres://fake")
+    monkeypatch.setattr(db, "load", lambda url: {"tree": {}, "econ": {}})
+    p2 = client.get("/api/state").json()["persistence"]
+    assert p2["backend"] == "postgres" and p2["durable"] is True and p2["db_ok"]
+
+
 # -- persistence round-trips the whole unified snapshot ----------------------
 def test_state_persists_across_reload(client):
     nid = client.post("/api/ask", json={"question": "영속질문", "author": "a"}).json()["node"]["id"]

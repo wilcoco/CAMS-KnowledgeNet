@@ -166,6 +166,29 @@ class UnifiedService:
         os.replace(tmp, self.db_path)
 
     # -- id minting -----------------------------------------------------------
+    def persistence_info(self) -> dict:
+        """What backend writes actually go to — so the UI can prove durability.
+
+        On an ephemeral host (Railway) ``file`` mode means data is lost on every
+        restart; ``postgres`` mode means it survives. If ``DATABASE_URL`` is set
+        we also ping the DB so a misconfigured/unreachable Postgres surfaces as
+        an explicit error instead of silent data loss.
+        """
+        from nightwish import db
+
+        url = db.database_url()
+        if not url:
+            return {"backend": "file", "durable": False, "path": self.db_path,
+                    "hint": "DATABASE_URL 미설정 — 임시 파일에 저장, 재시작 시 유실됨"}
+        info = {"backend": "postgres", "durable": True}
+        try:
+            snap = db.load(url)
+            info["db_has_snapshot"] = snap is not None
+            info["db_ok"] = True
+        except Exception as e:  # noqa: BLE001 — report, don't crash the page
+            info.update(durable=False, db_ok=False, error=str(e))
+        return info
+
     def _new_id(self, base: str) -> str:
         slug = slugify(base) or "node"
         if slug not in self.tree.nodes:
@@ -343,6 +366,7 @@ def create_app() -> FastAPI:
                 "node_count": len(real),
                 "stub_count": sum(1 for n in svc.tree.nodes.values() if n.is_stub),
                 "query_count": len(svc.tree.open_queries()),
+                "persistence": svc.persistence_info(),
             }
 
     @app.get("/api/nodes")

@@ -146,8 +146,15 @@ function wireLinks(el){
 
 async function refreshStat(){
   const s = await api('GET','/api/state');
-  $('#stat').textContent =
-    `노드 ${s.node_count} · 질의 ${s.query_count} · stub ${s.stub_count} · ${s.hub_mode}`;
+  const p = s.persistence || {};
+  let store;
+  if (p.backend === 'postgres' && p.db_ok !== false) store = '🟢 DB저장';
+  else if (p.backend === 'postgres') store = '🔴 DB오류';
+  else store = '🟡 임시(유실위험)';
+  const el = $('#stat');
+  el.textContent =
+    `노드 ${s.node_count} · 질의 ${s.query_count} · stub ${s.stub_count} · ${s.hub_mode} · ${store}`;
+  el.title = p.hint || p.error || (p.backend==='postgres' ? 'Postgres에 영속 저장됨' : '');
 }
 
 function nodeItem(n){
