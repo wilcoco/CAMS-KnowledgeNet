@@ -137,7 +137,8 @@
 <script>
 const $ = s => document.querySelector(s);
 const api = async (m, url, body) => {
-  const r = await fetch(url, {method:m, headers:{'Content-Type':'application/json'},
+  const r = await fetch(url, {method:m, cache:'no-store',
+    headers:{'Content-Type':'application/json'},
     body: body ? JSON.stringify(body) : undefined});
   if (!r.ok) { const t = await r.text(); throw new Error(t); }
   return r.json();

@@ -392,6 +392,17 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Nightwish — unified knowledge graph", version="1.0.0",
                   lifespan=lifespan)
 
+    @app.middleware("http")
+    async def no_cache_api(request, call_next):
+        """Never let the browser cache API reads — otherwise a freshly-saved
+        node can be hidden behind a stale cached GET and look 'unsaved'."""
+        response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
     @app.get("/api/health")
     def health():
         return {"status": "ok"}
