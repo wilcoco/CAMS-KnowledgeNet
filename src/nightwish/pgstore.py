@@ -356,6 +356,14 @@ def node_closure(url: str, node_id: str) -> Optional[dict]:
             back = [dict(zip(_COLS["node"], r)) for r in cur.fetchall()]
 
         nodes = {r["id"]: r for r in (sub + anc + back)}
+        # forward-link targets of THIS node, so its outlinks can show titles
+        cur.execute("SELECT target FROM node_link WHERE node_id = %s", (node_id,))
+        missing = [t for (t,) in cur.fetchall() if t not in nodes]
+        if missing:
+            cur.execute(f"SELECT {ncols} FROM node WHERE id = ANY(%s)", (missing,))
+            for row in cur.fetchall():
+                d = dict(zip(_COLS["node"], row))
+                nodes[d["id"]] = d
         ids = list(nodes)
 
         def by_node(table):

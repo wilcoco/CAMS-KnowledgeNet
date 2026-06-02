@@ -354,6 +354,12 @@ class EndorseBody(BaseModel):
     amount: float = Field(gt=0)
 
 
+class ExpandBody(BaseModel):
+    question: str = Field(min_length=1)   # the dragged text, or a refined question
+    author: str = Field(min_length=1)
+    space: str = "public"
+
+
 # --------------------------------------------------------------------------- #
 # views                                                                       #
 # --------------------------------------------------------------------------- #
@@ -409,6 +415,10 @@ def _node_view(svc: UnifiedService, node_id: str, space: str, *, full: bool = Fa
         view["thread"] = _thread(svc, n.id, space)
         view["backlinks"] = [
             {"id": b.id, "title": b.question} for b in t.backlinks(n.id, space)
+        ]
+        view["outlinks"] = [
+            {"id": s, "title": t.nodes[s].question}
+            for s in n.links if s in t.nodes and t._visible(t.nodes[s], space)
         ]
     return view
 
@@ -674,6 +684,58 @@ def create_app() -> FastAPI:
             except OntologyError as e:
                 raise HTTPException(400, str(e))
             return _node_view(svc, node_id, body.space, full=True)
+
+    @app.post("/api/nodes/{node_id}/expand")
+    def expand(node_id: str, body: ExpandBody):
+        """드래그한 내용을 AI에게 물어, 답이 달린 '연결된 개념 노드'로 만든다.
+
+        선택 텍스트(또는 다듬은 질문)를 제목으로 한 노드를 만들고(없거나 stub면 AI가
+        답을 채움), 원본 노드에서 그 노드로 **위키링크 관계**를 건다(원본이 동결 답이어도
+        본문은 안 건드리고 관계만 추가). 링크 행위는 거는 사람의 안목(hub)으로 적립.
+        """
+        svc = get_service()
+        if not body.question.strip():
+            raise HTTPException(400, "질문 내용이 필요합니다")
+        target_slug = slugify(body.question)
+        if not target_slug:
+            raise HTTPException(400, "유효한 제목이 아닙니다")
+        from nightwish import db, pgstore
+
+        url = db.database_url()
+        if url:
+            snap = pgstore.node_closure(url, node_id)
+            ctx_tree = UnifiedService._from_data(snap)[0] if snap else None
+        else:
+            with svc.reading():
+                ctx_tree = svc.tree
+        if ctx_tree is None or node_id not in ctx_tree.nodes:
+            raise HTTPException(404, f"node {node_id!r} not found")
+        existing = ctx_tree.nodes.get(target_slug)
+        need_ai = existing is None or existing.is_stub
+        # AI answer (slow) anchored to the source — outside the lock
+        ai_text = _ask_ai(body.question, _anchor_prompt(ctx_tree, node_id)) if need_ai else None
+        with svc.writing():
+            source = svc.tree.nodes.get(node_id)
+            if source is None:
+                raise HTTPException(404, f"node {node_id!r} not found")
+            target = svc.tree.nodes.get(target_slug)
+            if target is None or target.is_stub:
+                if target is not None:          # promote a stub → a real answer
+                    del svc.tree.nodes[target_slug]
+                try:
+                    svc.tree.add_root(target_slug, body.question, ai_text or "",
+                                      body.author, space=body.space)
+                except OntologyError as e:
+                    raise HTTPException(400, str(e))
+                svc.tree.mark_answered(target_slug, _ai_model)
+            # wikilink: source → target (relationship + foresight for the linker)
+            if target_slug != source.id and target_slug not in source.links:
+                source.links.append(target_slug)
+                svc.tree.scoring.link(body.author, target_slug, weight=1.0)
+            return {
+                "source": _node_view(svc, node_id, body.space, full=True),
+                "target": _node_view(svc, target_slug, body.space, full=True),
+            }
 
     @app.get("/api/queries")
     def list_queries(space: str = "public"):

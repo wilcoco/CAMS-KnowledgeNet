@@ -58,6 +58,12 @@
   #busy.on { display:flex; }
   .inline-busy { color:var(--acc); font-size:12px; }
   button[disabled] { opacity:.55; cursor:progress; }
+  /* 본문 드래그 → AI에게 묻고 연결 팝업 */
+  #sel-pop { position:absolute; display:none; z-index:60; width:280px; padding:8px;
+             background:var(--panel); border:1px solid var(--acc); border-radius:8px;
+             box-shadow:0 6px 20px rgba(0,0,0,.45); }
+  #sel-pop input { width:100%; margin:4px 0; }
+  .wl-row, .ol { color:var(--link); cursor:pointer; }
   .node-head { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
   .node-head h3 { margin:0; font-size:18px; }
   .prov { color:var(--mut); font-size:12px; }
@@ -81,6 +87,14 @@
 </head>
 <body>
 <div id="busy"><span class="spinner"></span> <span id="busy-msg">AI가 답변을 생성하는 중…</span></div>
+<div id="sel-pop">
+  <div class="prov" id="sel-src"></div>
+  <input id="sel-q" placeholder="이 내용을 AI에게 물어 연결…" />
+  <div class="row">
+    <button id="sel-ask">🤖 AI에게 묻고 연결</button>
+    <button class="sec" id="sel-close">닫기</button>
+  </div>
+</div>
 <header>
   <h1>업무 지식 정리</h1>
   <span class="stat" id="stat">…</span>
@@ -323,14 +337,19 @@ function renderNode(n){
     ${coauthorsHTML(n.coauthors)}
     ${n.is_query ? '' : `<div class="answer">${renderText(n.answer)}</div>`}
     ${queryAnswer}${endorse}
+    ${n.outlinks && n.outlinks.length ? `<div class="prov">연결: ${
+      n.outlinks.map(o=>`<a class="ol" data-oid="${esc(o.id)}">${esc(o.title)}</a>`).join(', ')
+    }</div>`:''}
     ${n.backlinks && n.backlinks.length ? `<div class="prov">백링크: ${
       n.backlinks.map(b=>`<a class="wl" data-link="${esc(b.title)}">${esc(b.title)}</a>`).join(', ')
     }</div>`:''}
+    <div class="prov" style="margin-top:4px">💡 본문에서 단어·문장을 드래그하면 AI에게 묻고 연결할 수 있어요.</div>
     <h2 class="sec">스레드 — 이 슬롯에 무엇이든 재귀로 붙습니다</h2>
     ${actbar(n.id)}
     <div class="reply" id="reply-${n.id}"></div>
     ${threadHTML(n.thread || [])}`;
   wireLinks(c);
+  c.querySelectorAll('.ol').forEach(a => a.onclick = ()=> openNode(a.dataset.oid));
   c.querySelectorAll('button[data-act]').forEach(b =>
     b.onclick = ()=> showReply(b.dataset.id, b.dataset.act));
   // 스레드 안 모든 답(후속 답 포함)의 평가 버튼
@@ -422,6 +441,37 @@ async function loadLedger(){
   const bals = Object.entries(l.available).map(([k,v])=>`${esc(k)}: ${v}`).join(' · ');
   $('#ledger').innerHTML = `잔액 — ${bals||'없음'}<br>소각 ${l.burned}`;
 }
+
+// -- 본문 드래그 → AI에게 묻고 연결 ------------------------------------------
+document.addEventListener('mouseup', e=>{
+  const pop = $('#sel-pop');
+  if (e.target.closest('#sel-pop')) return;            // 팝업 안 클릭은 무시
+  const sel = window.getSelection();
+  const text = sel ? sel.toString().trim() : '';
+  const anchorEl = sel && sel.anchorNode
+    ? (sel.anchorNode.nodeType===3 ? sel.anchorNode.parentElement : sel.anchorNode) : null;
+  if (!text || !current || current.is_query || !anchorEl || !anchorEl.closest('.answer')){
+    pop.style.display='none'; return;
+  }
+  const r = sel.getRangeAt(0).getBoundingClientRect();
+  pop.style.left = (window.scrollX + r.left) + 'px';
+  pop.style.top  = (window.scrollY + r.bottom + 6) + 'px';
+  $('#sel-q').value = text;
+  $('#sel-src').textContent = `선택: "${text.slice(0,40)}${text.length>40?'…':''}"`;
+  pop.style.display = 'block';
+});
+$('#sel-close').onclick = ()=> $('#sel-pop').style.display='none';
+$('#sel-ask').onclick = async ()=>{
+  const q = $('#sel-q').value.trim();
+  if (!q || !current) return;
+  try{
+    const r = await withBusy('AI에게 묻고 연결 중…',
+      ()=> api('POST',`/api/nodes/${encodeURIComponent(current.id)}/expand`,
+        {question:q, author:me(), space:space()}), $('#sel-ask'));
+    $('#sel-pop').style.display='none';
+    await refreshStat(); renderNode(r.source);    // '연결'에 새 개념이 뜸
+  }catch(e){ alert('실패: ' + e.message); }
+};
 
 // -- wiring ------------------------------------------------------------------
 $('#btn-search').onclick = doSearch;

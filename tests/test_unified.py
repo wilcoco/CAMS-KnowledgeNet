@@ -66,6 +66,8 @@ def fake_db(monkeypatch, store):
         for n in tree["nodes"]:                         # backlinks
             if slug and slug in n.get("links", []):
                 keep.add(n["id"])
+        for fwd in nodes[node_id].get("links", []):     # forward-link targets (outlinks)
+            keep.add(fwd)
         sc = tree["scoring"]
         return {"schema": snap.get("schema", "unified-1"), "tree": {
             "schema": tree.get("schema", 1), "clock": tree.get("clock", 0),
@@ -334,6 +336,30 @@ def test_followup_ai_is_anchored_to_parent_chain(client):
         assert "답: 원질문 ABC" in captured["prompt"]   # parent answer anchored
     finally:
         unified.set_ai(unified.offline_answer, model="offline-stub")
+
+
+def test_expand_creates_linked_concept_with_ai_answer(client):
+    """드래그한 내용을 AI에게 물어 연결된 개념 노드로 만든다."""
+    src = client.post("/api/ask", json={"question": "범퍼 생산 공정", "author": "u"}).json()["node"]["id"]
+    r = client.post(f"/api/nodes/{src}/expand",
+                    json={"question": "도장 공정", "author": "u"}).json()
+    # 새 개념 노드가 AI 답과 함께 생김
+    assert r["target"]["title"] == "도장 공정"
+    assert r["target"]["frozen"] and r["target"]["answer"]
+    # 원본 → 개념 으로 연결(outlinks)이 생김
+    assert any(o["id"] == r["target"]["id"] for o in r["source"]["outlinks"])
+    # 거는 사람의 안목(hub)이 적립됨
+    hubs = {u["user"]: u["hub"] for u in client.get("/api/scores").json()["top_contributors"]}
+    assert hubs.get("u", 0) > 0
+
+
+def test_expand_links_to_existing_node_without_reanswering(client):
+    client.post("/api/ask", json={"question": "열처리", "author": "a"})   # 이미 존재
+    src = client.post("/api/ask", json={"question": "표면 처리 개요", "author": "b"}).json()["node"]["id"]
+    r = client.post(f"/api/nodes/{src}/expand", json={"question": "열처리", "author": "b"}).json()
+    # 기존 노드에 연결만 — 새로 만들지 않음
+    assert r["target"]["title"] == "열처리"
+    assert any(o["title"] == "열처리" for o in r["source"]["outlinks"])
 
 
 def test_admin_reset_wipes_everything(client):
