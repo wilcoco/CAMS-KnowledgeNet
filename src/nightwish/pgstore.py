@@ -297,6 +297,19 @@ def save(url: str, snap: dict) -> None:
 # --------------------------------------------------------------------------- #
 # point reads — touch only the rows needed, not the whole graph               #
 # --------------------------------------------------------------------------- #
+def wipe(url: str) -> None:
+    """Delete ALL data — every normalized table *and* the legacy blob.
+
+    Dropping ``nightwish_state`` is essential: if it survives, the next startup
+    re-migrates it back and the "deleted" data reappears.
+    """
+    with _connect(url) as conn, conn.cursor() as cur:
+        for table in _COLS:                      # node, node_link, … meta
+            cur.execute(f"DELETE FROM {table}")
+        cur.execute("DROP TABLE IF EXISTS nightwish_state")   # legacy blob → no re-seed
+        conn.commit()
+
+
 def meta_info(url: str) -> dict:
     """Last write time, for the durability indicator."""
     with _connect(url) as conn, conn.cursor() as cur:

@@ -94,6 +94,7 @@
   <button class="sec" id="add-space">+</button>
   <label class="m">나</label>
   <input id="me" value="anon" style="width:90px" />
+  <button class="sec" id="btn-reset" title="모든 노드·평가 삭제 (되돌릴 수 없음)">전체 삭제</button>
 </header>
 
 <div class="grid">
@@ -414,6 +415,15 @@ $('#q-post').onclick = async ()=>{
 $('#btn-mint').onclick = async ()=>{
   await api('POST','/api/mint',{account:me(), amount:Number($('#mint-amt').value)});
   loadLedger();
+};
+$('#btn-reset').onclick = async ()=>{
+  if (!confirm('모든 노드·평가·포인트를 삭제합니다. 되돌릴 수 없습니다. 진행할까요?')) return;
+  try {
+    await withBusy('전체 삭제 중…',
+      ()=> api('POST','/api/admin/reset?confirm=DELETE-ALL'), $('#btn-reset'));
+    $('#center').innerHTML = '<div class="prov">전체 삭제됨. 새 질문을 시작하세요.</div>';
+    await refreshStat(); reloadAll();
+  } catch(e){ alert('삭제 실패: ' + e.message); }
 };
 $('#add-space').onclick = ()=>{
   const v = $('#space-new').value.trim(); if(!v) return;

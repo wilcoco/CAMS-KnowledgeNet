@@ -425,6 +425,30 @@ def create_app() -> FastAPI:
     def health():
         return {"status": "ok"}
 
+    @app.post("/api/admin/reset")
+    def admin_reset(confirm: str = ""):
+        """Wipe ALL data (and the legacy blob, so nothing re-seeds). Destructive.
+
+        Requires ``?confirm=DELETE-ALL``. Leaves an empty, fresh graph.
+        """
+        if confirm != "DELETE-ALL":
+            raise HTTPException(400, "confirm=DELETE-ALL 필요 (전체 삭제 확인)")
+        from nightwish import db, pgstore
+        from nightwish.scoring import ScoreEngine
+
+        svc = get_service()
+        url = db.database_url()
+        with svc._lock:
+            if url:
+                pgstore.wipe(url)
+                pgstore.init(url)          # recreate empty tables
+            elif os.path.exists(svc.db_path):
+                os.remove(svc.db_path)
+            svc.tree = OntologyTree(scoring=ScoreEngine(mode="harmonic"))
+            svc.econ = WikiEconomy()
+            svc._seq = 0
+        return {"reset": True, "node_count": 0}
+
     @app.get("/api/dbcheck")
     def dbcheck():
         """Prove writes actually reach Postgres — write a probe, read it back.

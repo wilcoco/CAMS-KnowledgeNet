@@ -313,6 +313,17 @@ def test_get_node_point_read_equals_full_render(monkeypatch, tmp_path):
     assert any(t["title"] == "두께는?" for t in point["thread"])   # follow-up thread intact
 
 
+def test_admin_reset_wipes_everything(client):
+    client.post("/api/ask", json={"question": "지울 질문", "author": "a"})
+    assert client.get("/api/state").json()["node_count"] >= 1
+    # needs the confirm token
+    assert client.post("/api/admin/reset").status_code == 400
+    r = client.post("/api/admin/reset", params={"confirm": "DELETE-ALL"})
+    assert r.status_code == 200 and r.json()["reset"] is True
+    assert client.get("/api/state").json()["node_count"] == 0
+    assert client.get("/api/search", params={"q": "지울"}).json() == []
+
+
 def test_dbcheck_reports_file_mode_without_db(client):
     r = client.get("/api/dbcheck").json()
     assert r["backend"] == "file" and r["durable"] is False
