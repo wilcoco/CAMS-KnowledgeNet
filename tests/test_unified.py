@@ -45,7 +45,45 @@ def fake_db(monkeypatch, store):
     monkeypatch.setattr(pgstore, "load", lambda url: store.get("snap"))
     monkeypatch.setattr(pgstore, "save", lambda url, snap: store.__setitem__("snap", snap))
     monkeypatch.setattr(pgstore, "transaction", transaction)
+    def node_closure(url, node_id):
+        snap = store.get("snap")
+        if not snap:
+            return None
+        tree, econ = snap["tree"], snap["econ"]
+        nodes = {n["id"]: n for n in tree["nodes"]}
+        if node_id not in nodes:
+            return None
+        keep, stack = set(), [node_id]
+        while stack:                                   # descendants
+            i = stack.pop()
+            keep.add(i)
+            stack += [n["id"] for n in tree["nodes"] if n.get("parent_id") == i and n["id"] not in keep]
+        cur = node_id
+        while cur:                                     # ancestors
+            keep.add(cur)
+            cur = nodes.get(cur, {}).get("parent_id")
+        slug = nodes[node_id].get("slug")
+        for n in tree["nodes"]:                         # backlinks
+            if slug and slug in n.get("links", []):
+                keep.add(n["id"])
+        sc = tree["scoring"]
+        return {"schema": snap.get("schema", "unified-1"), "tree": {
+            "schema": tree.get("schema", 1), "clock": tree.get("clock", 0),
+            "large_stake_threshold": tree.get("large_stake_threshold", 25.0),
+            "scoring": {"mode": sc.get("mode", "harmonic"),
+                        "authority": {k: v for k, v in sc.get("authority", {}).items() if k in keep},
+                        "hub": dict(sc.get("hub", {})),
+                        "linkers": {k: v for k, v in sc.get("linkers", {}).items() if k in keep}},
+            "nodes": [n for n in tree["nodes"] if n["id"] in keep]},
+            "econ": {"available": dict(econ.get("available", {})),
+                     "staked": {k: v for k, v in econ.get("staked", {}).items() if k in keep},
+                     "endorsers": {k: v for k, v in econ.get("endorsers", {}).items() if k in keep},
+                     "burned": econ.get("burned", 0.0),
+                     "dividend_rate": econ.get("dividend_rate", 0.2),
+                     "burn_rate": econ.get("burn_rate", 0.02)}}
+
     monkeypatch.setattr(pgstore, "counts", counts)
+    monkeypatch.setattr(pgstore, "node_closure", node_closure)
     monkeypatch.setattr(pgstore, "meta_info",
                         lambda url: {"updated_at": "2026-06-02T00:00:00+00:00"})
 
@@ -250,6 +288,31 @@ def test_slow_ai_ask_does_not_hold_the_lock(client):
 
 
 # -- the UI can prove whether storage is durable -----------------------------
+def test_get_node_point_read_equals_full_render(monkeypatch, tmp_path):
+    """Opening a node via the closure point-read must render identically to the
+    full-graph render — same answer, thread, coauthors, backlinks."""
+    store: dict = {}
+    fake_db(monkeypatch, store)
+    unified.reset_service(unified.UnifiedService(str(tmp_path / "x.json")))
+    with TestClient(unified.app) as c:
+        a = c.post("/api/ask", json={"question": "지붕 단열 [[소재]]", "author": "J"}).json()["node"]["id"]
+        c.post(f"/api/nodes/{a}/contribute", json={"kind": "comment", "author": "K", "body": "보강"})
+        c.post(f"/api/nodes/{a}/contribute", json={"kind": "followup", "author": "P", "body": "두께는?"})
+        c.post("/api/nodes", json={"title": "딴 문서", "body": "[[지붕 단열]] 역링크", "author": "B"})
+        c.post("/api/mint", json={"account": "K", "amount": 50})
+        c.post("/api/endorse", json={"account": "K", "node_id": a, "amount": 10})
+        point = c.get(f"/api/nodes/{a}").json()                # point read via closure
+    unified.reset_service(None)
+
+    # render the same node from the WHOLE snapshot via the engine
+    tree, econ = unified.UnifiedService._from_data(store["snap"])
+    full = unified._node_view(unified._ReadView(tree, econ), a, "public", full=True)
+
+    assert point == full                               # identical render (incl. backlinks)
+    assert point["coauthors"][1]["user"] == "K"        # evaluation=authorship intact
+    assert any(t["title"] == "두께는?" for t in point["thread"])   # follow-up thread intact
+
+
 def test_dbcheck_reports_file_mode_without_db(client):
     r = client.get("/api/dbcheck").json()
     assert r["backend"] == "file" and r["durable"] is False

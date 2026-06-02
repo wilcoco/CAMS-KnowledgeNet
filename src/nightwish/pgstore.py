@@ -305,6 +305,69 @@ def meta_info(url: str) -> dict:
         return {"updated_at": row[0] if row else None}
 
 
+def node_closure(url: str, node_id: str) -> Optional[dict]:
+    """A *point read*: load only the rows needed to render one node's view.
+
+    That closure = the node + its descendants (thread) + its ancestors (so a
+    follow/fork's answer resolves up the chain) + nodes that wikilink to it
+    (backlinks), plus the supporting link/linker/stake/endorser/authority rows
+    for those nodes and the (small) hub table. Returns a partial snapshot the
+    caller feeds to the normal view code — never loads the whole graph.
+    """
+    ncols = ", ".join(_COLS["node"])
+    nsel = ", ".join("n." + c for c in _COLS["node"])
+    with _connect(url) as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT {ncols} FROM node WHERE id = %s", (node_id,))
+        if cur.fetchone() is None:
+            return None
+        # descendants (target + everything below it)
+        cur.execute(
+            f"WITH RECURSIVE sub AS ("
+            f"  SELECT {ncols} FROM node WHERE id = %s"
+            f"  UNION ALL SELECT {nsel} FROM node n JOIN sub ON n.parent_id = sub.id)"
+            f" SELECT {ncols} FROM sub", (node_id,))
+        sub = [dict(zip(_COLS["node"], r)) for r in cur.fetchall()]
+        # ancestors (target + parents up to the root)
+        cur.execute(
+            f"WITH RECURSIVE anc AS ("
+            f"  SELECT {ncols} FROM node WHERE id = %s"
+            f"  UNION ALL SELECT {nsel} FROM node n JOIN anc ON anc.parent_id = n.id)"
+            f" SELECT {ncols} FROM anc", (node_id,))
+        anc = [dict(zip(_COLS["node"], r)) for r in cur.fetchall()]
+        slug = next((r["slug"] for r in sub if r["id"] == node_id), None)
+        back = []
+        if slug:
+            cur.execute(
+                f"SELECT {ncols} FROM node WHERE id IN "
+                f"(SELECT node_id FROM node_link WHERE target = %s)", (slug,))
+            back = [dict(zip(_COLS["node"], r)) for r in cur.fetchall()]
+
+        nodes = {r["id"]: r for r in (sub + anc + back)}
+        ids = list(nodes)
+
+        def by_node(table):
+            cols = _COLS[table]
+            cur.execute(
+                f"SELECT {', '.join(cols)} FROM {table} WHERE node_id = ANY(%s)", (ids,))
+            return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+        link_rows = by_node("node_link")
+        linker_rows = by_node("linker")
+        auth_rows = by_node("node_authority")
+        stake_rows = by_node("stake")
+        endorser_rows = by_node("endorser")
+        cur.execute("SELECT account, value FROM user_hub")          # small, load all
+        hub_rows = [{"account": a, "value": v} for a, v in cur.fetchall()]
+        cur.execute("SELECT k, v FROM meta")
+        meta_rows = [{"k": k, "v": v} for k, v in cur.fetchall()]
+
+    return rows_to_snapshot({
+        "node": list(nodes.values()), "node_link": link_rows, "linker": linker_rows,
+        "node_authority": auth_rows, "user_hub": hub_rows, "stake": stake_rows,
+        "endorser": endorser_rows, "balance": [], "meta": meta_rows,
+    })
+
+
 def counts(url: str) -> dict:
     """Cheap aggregates for /api/state without loading every node."""
     with _connect(url) as conn, conn.cursor() as cur:

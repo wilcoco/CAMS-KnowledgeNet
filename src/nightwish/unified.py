@@ -322,6 +322,19 @@ class EndorseBody(BaseModel):
 # --------------------------------------------------------------------------- #
 # views                                                                       #
 # --------------------------------------------------------------------------- #
+class _ReadView:
+    """Minimal stand-in carrying just ``tree``/``econ`` for the view helpers.
+
+    Lets point reads render a node from a *partial* graph (its closure) using the
+    same :func:`_node_view`/`_thread`/`_coauthors` code as the full service.
+    """
+
+    __slots__ = ("tree", "econ")
+
+    def __init__(self, tree, econ):
+        self.tree, self.econ = tree, econ
+
+
 def _coauthors(svc: UnifiedService, node_id: str) -> list[dict]:
     """The node's authorship: the original author, then evaluators in order.
 
@@ -481,6 +494,20 @@ def create_app() -> FastAPI:
     @app.get("/api/nodes/{node_id}")
     def get_node(node_id: str, space: str = "public"):
         svc = get_service()
+        from nightwish import db, pgstore
+
+        url = db.database_url()
+        if url:
+            # point read: load only this node's closure (not the whole graph)
+            # and render it with the normal view code.
+            snap = pgstore.node_closure(url, node_id)
+            if snap is None:
+                raise HTTPException(404, f"unknown node {node_id!r}")
+            tree, econ = UnifiedService._from_data(snap)
+            n = tree.nodes.get(node_id)
+            if n is None or not tree._visible(n, space):
+                raise HTTPException(404, f"unknown node {node_id!r}")
+            return _node_view(_ReadView(tree, econ), node_id, space, full=True)
         with svc.reading():
             n = svc.tree.nodes.get(node_id)
             if n is None or not svc.tree._visible(n, space):
