@@ -46,6 +46,9 @@ def _busy_snapshot(tmp_path) -> dict:
         # group-private endorse (free-issue group coin) must also round-trip
         c.post("/api/endorse", json={"account": "Acme", "node_id": a,
                                      "amount": 7, "space": "acme"})
+        # a contextual unfold (anchored child) must round-trip its anchor
+        c.post(f"/api/nodes/{a}/contribute",
+               json={"kind": "unfold", "author": "Kim", "anchor": "범퍼", "body": "소재?"})
         snap = svc._snapshot()
     unified.reset_service(None)
     return snap

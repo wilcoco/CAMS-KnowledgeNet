@@ -343,10 +343,12 @@ class PageBody(BaseModel):
 
 
 class ContribBody(BaseModel):
-    kind: str = "comment"  # comment | fork | follow | followup
+    kind: str = "comment"  # comment | fork | follow | followup | unfold
     author: str = Field(min_length=1)
     body: str = ""
     space: str = "public"
+    #: contextual unfold (노트 07): the parent text span being elaborated inline
+    anchor: str = ""
 
 
 class QueryBody(BaseModel):
@@ -443,6 +445,7 @@ def _node_view(svc: UnifiedService, node_id: str, space: str, *, full: bool = Fa
     view["adopted"] = view["staked"] > 0
     if full:
         view["thread"] = _thread(svc, n.id, space)
+        view["unfolds"] = _unfolds(svc, n.id, space)
         view["backlinks"] = [
             {"id": b.id, "title": b.question} for b in t.backlinks(n.id, space)
         ]
@@ -454,11 +457,15 @@ def _node_view(svc: UnifiedService, node_id: str, space: str, *, full: bool = Fa
 
 
 def _thread(svc: UnifiedService, node_id: str, space: str) -> list[dict]:
-    """Recursive contribution thread visible in ``space`` (stubs excluded)."""
+    """Recursive contribution thread visible in ``space``.
+
+    Excludes stubs and **contextual unfolds** (anchored children) — those render
+    inline at their span via :func:`_unfolds`, not in the flat thread (노트 07).
+    """
     t = svc.tree
     out = []
     for child in t.children_of(node_id):
-        if not t._visible(child, space) or child.is_stub:
+        if not t._visible(child, space) or child.is_stub or child.is_unfold:
             continue
         out.append({
             "id": child.id, "kind": child.action.value, "author": child.author,
@@ -467,6 +474,29 @@ def _thread(svc: UnifiedService, node_id: str, space: str) -> list[dict]:
             "authority": round(t.authority_in(child.id, space), 4),
             "staked": round(sum(svc.econ.staked_on(child.id).values()), 4),
             "replies": _thread(svc, child.id, space),
+        })
+    return out
+
+
+def _unfolds(svc: UnifiedService, node_id: str, space: str) -> list[dict]:
+    """Contextual unfolds (anchored children) — rendered inline at their span.
+
+    Each carries its quoted ``anchor``, the AI answer, and recursively its **own**
+    unfolds + thread, so the in-context recursion reads in place (노트 07).
+    """
+    t = svc.tree
+    out = []
+    for child in t.children_of(node_id):
+        if not t._visible(child, space) or child.is_stub or not child.is_unfold:
+            continue
+        out.append({
+            "id": child.id, "anchor": child.anchor, "author": child.author,
+            "title": child.question, "answer": child.answer,
+            "frozen": child.frozen, "model": child.model, "space": child.space,
+            "authority": round(t.authority_in(child.id, space), 4),
+            "staked": round(sum(svc.econ.staked_on(child.id).values()), 4),
+            "unfolds": _unfolds(svc, child.id, space),
+            "thread": _thread(svc, child.id, space),
         })
     return out
 
@@ -683,13 +713,15 @@ def create_app() -> FastAPI:
         """
         svc = get_service()
         kind = body.kind if body.kind in (
-            "comment", "fork", "follow", "followup") else "comment"
+            "comment", "fork", "follow", "followup", "unfold") else "comment"
         if kind == "followup" and not body.body.strip():
             raise HTTPException(400, "후속질문 내용이 필요합니다")
-        # A follow-up's AI answer is a slow network call: do it OUTSIDE the lock,
-        # but first anchor it to the parent chain's Q&A so it answers *in thread*.
+        if kind == "unfold" and not body.anchor.strip():
+            raise HTTPException(400, "펼칠 구절(anchor)이 필요합니다")
+        # A follow-up / unfold AI answer is a slow network call: do it OUTSIDE the
+        # lock, but first anchor it to the parent chain so it answers *in context*.
         ai_text = None
-        if kind == "followup":
+        if kind in ("followup", "unfold"):
             from nightwish import db, pgstore
 
             url = db.database_url()
@@ -701,7 +733,12 @@ def create_app() -> FastAPI:
                     ctx_tree = svc.tree
             if ctx_tree is None or node_id not in ctx_tree.nodes:
                 raise HTTPException(404, f"node {node_id!r} not found")
-            ai_text = _ask_ai(body.body, _anchor_prompt(ctx_tree, node_id))
+            if kind == "unfold":
+                span = body.anchor.strip()
+                q = body.body.strip() or f'"{span}" — 이 맥락에서 자세히 설명'
+            else:
+                q = body.body
+            ai_text = _ask_ai(q, _anchor_prompt(ctx_tree, node_id))
         with svc.writing():
             parent = svc.tree.nodes.get(node_id)
             if parent is None or not svc.tree._visible(parent, body.space):
@@ -724,6 +761,16 @@ def create_app() -> FastAPI:
                     svc.tree.contribute(aid, qid, "AI", ai_text,
                                         stake=0.0, space=body.space)
                     svc.tree.mark_answered(aid, _ai_model)
+                elif kind == "unfold":
+                    # 맥락 내 펼침: 스팬에 앵커된 단일 AI 답 → 인라인 재귀(노트 07)
+                    span = body.anchor.strip()
+                    uid = svc._child_id(node_id)
+                    svc.tree.contribute(uid, node_id, body.author, ai_text,
+                                        stake=0.0,
+                                        question=(body.body.strip() or span),
+                                        value_add=True, space=body.space,
+                                        anchor=span)
+                    svc.tree.mark_answered(uid, _ai_model)
                 else:  # comment / 보강
                     if not body.body.strip():
                         raise HTTPException(400, "의견 내용이 필요합니다")

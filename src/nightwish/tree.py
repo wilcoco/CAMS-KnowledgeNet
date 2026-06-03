@@ -132,6 +132,15 @@ class Node:
     #: last mutation tick / last editor (wiki provenance)
     updated_at: int = 0
     last_editor: str = ""
+    #: contextual unfold (노트 07): the parent text span this node elaborates.
+    #: ``""`` = a normal commons/thread node; non-empty = an in-context unfold,
+    #: rendered inline at its quoted span rather than in the flat thread.
+    anchor: str = ""
+
+    @property
+    def is_unfold(self) -> bool:
+        """A contextual unfold — elaborates a span of its parent, shown inline."""
+        return bool(self.anchor)
 
     @property
     def is_answer(self) -> bool:
@@ -344,8 +353,14 @@ class OntologyTree:
         question: str | None = None,
         value_add: bool = True,
         space: str | None = None,
+        anchor: str = "",
     ) -> Node:
-        """추가 기여 — add context / rebuttal / link / ontology as a new node."""
+        """추가 기여 — add context / rebuttal / link / ontology as a new node.
+
+        ``anchor`` (노트 07): a quoted span of the parent answer this node
+        elaborates. Non-empty makes it a **contextual unfold** — shown inline at
+        the span instead of in the flat thread.
+        """
         parent = self._require(parent_id)
         self._check_stake_rule(stake, value_add)
         # The contribution stores only its *own* content. The thread's question
@@ -361,6 +376,7 @@ class OntologyTree:
             value_add=value_add,
             created_at=self._tick(),
             space=space if space is not None else parent.space,
+            anchor=anchor,
         )
         self._attach(parent, node)
         self._finalize(node)
@@ -776,7 +792,7 @@ class OntologyTree:
             "children": list(n.children), "slug": n.slug, "links": list(n.links),
             "frozen": n.frozen, "model": n.model, "answered_at": n.answered_at,
             "space": n.space, "updated_at": n.updated_at,
-            "last_editor": n.last_editor,
+            "last_editor": n.last_editor, "anchor": n.anchor,
         }
 
     @staticmethod
@@ -791,7 +807,7 @@ class OntologyTree:
             links=list(d.get("links", [])), frozen=d.get("frozen", False),
             model=d.get("model", ""), answered_at=d.get("answered_at", ""),
             space=d.get("space", "public"), updated_at=d.get("updated_at", 0),
-            last_editor=d.get("last_editor", ""),
+            last_editor=d.get("last_editor", ""), anchor=d.get("anchor", ""),
         )
 
     @classmethod

@@ -282,6 +282,29 @@ def test_fill_stub_with_ai_keeps_the_slug(client):
                           client.get("/api/search", params={"q": "벡터"}).json()}
 
 
+# -- dual ontology: contextual unfold renders inline, recursively ------------
+def test_contextual_unfold_is_inline_and_recursive(client):
+    nid = client.post("/api/ask", json={"question": "분산 합의", "author": "u"}).json()["node"]["id"]
+    r = client.post(f"/api/nodes/{nid}/contribute",
+                    json={"kind": "unfold", "author": "u", "anchor": "합의", "body": "왜 어려운가"})
+    v = r.json()
+    assert v["thread"] == []                       # unfold is NOT in the flat thread
+    assert len(v["unfolds"]) == 1
+    u = v["unfolds"][0]
+    assert u["anchor"] == "합의" and u["frozen"] and u["answer"]
+    # an unfold can itself be unfolded (recursion); a comment still goes to thread
+    client.post(f"/api/nodes/{u['id']}/contribute",
+                json={"kind": "unfold", "author": "u", "anchor": "정족수"})
+    client.post(f"/api/nodes/{nid}/contribute",
+                json={"kind": "comment", "author": "u", "body": "보강"})
+    v2 = client.get(f"/api/nodes/{nid}").json()
+    assert len(v2["unfolds"][0]["unfolds"]) == 1   # nested unfold
+    assert len(v2["thread"]) == 1                   # comment stays in thread
+    # unfold requires an anchor
+    bad = client.post(f"/api/nodes/{nid}/contribute", json={"kind": "unfold", "author": "u"})
+    assert bad.status_code == 400
+
+
 # -- wikilinks accrue authority; economy pays dividends up the chain ---------
 def test_wikilink_authority_and_endorse_dividend(client):
     # alice links [[핵심개념]] first; bob links it later → alice's foresight (hub)
