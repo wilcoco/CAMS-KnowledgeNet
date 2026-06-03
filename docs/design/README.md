@@ -9,6 +9,7 @@
 | [`03-decisions-log.md`](03-decisions-log.md) | **결정·대화 기록.** 세션에서 무엇을 왜 정했는지, 고친 버그(원인→조치→커밋), 미해결 과제. |
 | [`04-positioning.md`](04-positioning.md) | **포지셔닝 — 이것이 무엇인가.** 위키피디아와의 근본 차이, 분권의 두 층위(권위=분권 / 인프라=아직 중앙), AI↔인간 역할. |
 | [`05-private-public-endorse.md`](05-private-public-endorse.md) | **사적/공적 구별과 연동 — 다중통화 endorse.** 개념=공용 앵커 / 사적=층, 공통 코인+그룹 코인(비호환·자유발행·비태환·단방향), 검색=공통 prior+사적 오버레이. |
+| [`06-search.md`](06-search.md) | **검색 — 하이브리드 색인(엣지).** 쓰기 시점 역색인(BM25,CJK)+임베딩, 검색은 O(매칭), 권위·그룹 사적 endorse로 재정렬(그룹마다 다른 순위). |
 | [`glossary.md`](glossary.md) | 핵심 용어집 (허브/권위/포크/잠복/색인재고/암묵지). |
 | [`lineage.md`](lineage.md) | 설계 진화 계보 (256 → 391 → 새 설계 → 통합 재귀). |
 

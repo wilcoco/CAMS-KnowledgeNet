@@ -53,6 +53,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from nightwish.scoring import ScoreEngine
+from nightwish.search import HybridIndex
 
 #: author marker for an auto-created, not-yet-written stub node
 STUB_AUTHOR = "(stub)"
@@ -164,6 +165,9 @@ class OntologyTree:
     #: stake at/above this requires an accompanying contribution (value_add)
     large_stake_threshold: float = 25.0
     _clock: int = 0
+    #: hybrid search index — built lazily on first search, kept incrementally
+    #: fresh via ``_finalize``. Not serialised (rebuilt from nodes on load).
+    _search: HybridIndex | None = field(default=None, compare=False, repr=False)
 
     # -- internals -------------------------------------------------------------
     def _tick(self) -> int:
@@ -224,6 +228,33 @@ class OntologyTree:
             if ts not in previous and node.author != STUB_AUTHOR:
                 self.scoring.link(node.author, ts, weight=1.0)
         node.links = link_slugs
+        # Keep the search index fresh at write time (cheap, incremental). Stubs
+        # are empty concept placeholders — excluded, like in search itself.
+        if self._search is not None and not node.is_stub:
+            self._search.upsert(node.id, self._doc_text(node))
+
+    # -- search index ----------------------------------------------------------
+    @staticmethod
+    def _doc_text(node: Node) -> str:
+        return f"{node.question}\n{node.answer}"
+
+    def _ensure_index(self) -> HybridIndex:
+        if self._search is None:
+            idx = HybridIndex()
+            for n in self.nodes.values():
+                if not n.is_stub:
+                    idx.upsert(n.id, self._doc_text(n))
+            self._search = idx
+        return self._search
+
+    def _top_ancestor(self, node_id: str) -> str:
+        """The shareable unit a hit rolls up to (the thread's root)."""
+        seen: set[str] = set()
+        cur = self.nodes.get(node_id)
+        while cur is not None and cur.parent_id and cur.parent_id not in seen:
+            seen.add(cur.id)
+            cur = self.nodes.get(cur.parent_id)
+        return cur.id if cur is not None else node_id
 
     # -- creation --------------------------------------------------------------
     def add_root(
@@ -623,51 +654,46 @@ class OntologyTree:
     def search(
         self, query: str, space: str | None = None, limit: int = 50
     ) -> list[Node]:
-        """Forgiving keyword search over question + answer + descendant thread.
+        """Hybrid (BM25 ⊕ semantic) search, re-ranked by authority (our edge).
 
-        Per-token substring frequency (CJK-morphology tolerant, order-free) with a
-        phrase boost. Filtered to the viewer's layer. The whole subtree's text is
-        included so contributions/follow-ups are searchable too.
+        The index does relevance at ``O(matching docs)``; the tree then fuses in
+        its **authority / group-overlay** signal (``authority_in``), so a query is
+        re-ranked by *who endorsed it* — and, inside a group, by that group's own
+        private endorsements. A hit on a contribution rolls up to its thread root
+        (the shareable unit). Empty query = browse by authority. (docs/design/06.)
         """
-        q = query.strip().lower()
+        q = (query or "").strip()
         if not q:
-            return [n for n in self.visible_nodes(space) if not n.is_stub]
-        tokens = [t for t in re.split(r"\s+", q) if t]
-        scored: list[tuple[float, Node]] = []
-        for node in self.nodes.values():
-            if not self._visible(node, space) or node.is_stub:
+            vis = [n for n in self.visible_nodes(space) if not n.is_stub]
+            vis.sort(key=lambda n: (-self.authority_in(n.id, space), -n.updated_at))
+            return vis[:limit]
+
+        index = self._ensure_index()
+
+        # Membrane: checked per posting hit (O(matches)), so a group-private
+        # contribution never surfaces to public via search — without an O(N) scan.
+        def visible(doc_id: str) -> bool:
+            n = self.nodes.get(doc_id)
+            return n is not None and not n.is_stub and self._visible(n, space)
+
+        hits = index.query(q, is_allowed=visible, limit=limit * 4)
+        if not hits:
+            return []
+
+        # Roll each hit up to its shareable root and accumulate relevance, then
+        # lift by adoption (authority the viewer can see in this space).
+        rolled: dict[str, float] = {}
+        for doc_id, score in hits:
+            root = self._top_ancestor(doc_id)
+            root_node = self.nodes.get(root)
+            if root_node is None or root_node.is_stub or not self._visible(root_node, space):
                 continue
-            title = node.question.lower()
-            text = self._subtree_text(node.id, space)
-            score = 0.0
-            for t in tokens:
-                score += 3.0 * title.count(t) + 1.0 * text.count(t)
-            if q in title:
-                score += 5.0
-            elif q in text:
-                score += 2.0
-            if score > 0:
-                # Evaluation is adoption: among textually relevant hits, the
-                # ones the crowd endorsed (higher authority) rise — so a
-                # well-evaluated Q&A becomes the answer the next question gets.
-                authority = self.scoring.authority_of(node.id)
-                score *= 1.0 + ADOPTION_BOOST * authority
-                scored.append((score, node))
-        scored.sort(key=lambda sn: (-sn[0], -sn[1].updated_at))
-        return [n for _s, n in scored[:limit]]
-
-    def _subtree_text(self, node_id: str, space: str | None = None) -> str:
-        """Question + answer of a node and all descendants *visible in ``space``*.
-
-        Descendants in another layer are skipped so a public search can never
-        match on a group-private contribution's text (no layer leak via search).
-        """
-        node = self.nodes[node_id]
-        parts = [node.question, node.answer]
-        for child_id in node.children:
-            if self._visible(self.nodes[child_id], space):
-                parts.append(self._subtree_text(child_id, space))
-        return " ".join(parts).lower()
+            rolled[root] = rolled.get(root, 0.0) + score
+        ranked = sorted(
+            rolled.items(),
+            key=lambda rs: -(rs[1] * (1.0 + ADOPTION_BOOST * self.authority_in(rs[0], space))),
+        )
+        return [self.nodes[r] for r, _s in ranked[:limit]]
 
     # -- persistence (the single unified snapshot) ----------------------------
     def to_json(self) -> dict:
