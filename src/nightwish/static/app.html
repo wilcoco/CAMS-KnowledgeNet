@@ -76,6 +76,8 @@
              background:var(--panel); border:1px solid var(--acc); border-radius:8px;
              box-shadow:0 6px 20px rgba(0,0,0,.45); }
   #sel-pop input { width:100%; margin:4px 0; }
+  #sel-pop button.suggested { outline:2px solid var(--good); outline-offset:1px; }
+  #sel-hint { margin-top:6px; min-height:14px; }
   /* 작업 결과(평가·채우기 등) 토스트 — 패널 재렌더로 사라지지 않게 화면 상단 고정 */
   #toast { position:fixed; top:10px; left:50%; transform:translateX(-50%); z-index:70;
            display:none; max-width:80vw; padding:8px 14px; border-radius:8px;
@@ -123,6 +125,7 @@
     <button id="sel-unfold" title="이 맥락에서 펼침 — 이 자리에 인라인 재귀(국소)">↳ 맥락 펼침</button>
     <button class="sec" id="sel-close">닫기</button>
   </div>
+  <div class="prov" id="sel-hint"></div>
 </div>
 <header>
   <h1>업무 지식 정리</h1>
@@ -641,6 +644,15 @@ document.addEventListener('mouseup', e=>{
   $('#sel-q').value = text;
   $('#sel-src').textContent = `선택: "${text.slice(0,40)}${text.length>40?'…':''}"`;
   pop.style.display = 'block';
+  // AI/휴리스틱이 (a)보편개념 / (b)맥락펼침 제안 → 해당 버튼 강조(노트 07 D2)
+  $('#sel-ask').classList.remove('suggested'); $('#sel-unfold').classList.remove('suggested');
+  $('#sel-hint').textContent = '🤖 분류 중…';
+  const ctx = (pane._node && pane._node.answer || '').slice(0, 200);
+  api('POST','/api/classify',{span:text, context:ctx}).then(r=>{
+    if (selText !== text || pop.style.display==='none') return;   // 선택 바뀌면 무시
+    $('#sel-hint').textContent = r.reason || '';
+    (r.suggestion==='concept' ? $('#sel-ask') : $('#sel-unfold')).classList.add('suggested');
+  }).catch(()=> { $('#sel-hint').textContent=''; });
 });
 $('#sel-close').onclick = ()=> $('#sel-pop').style.display='none';
 // (a) 보편 개념 — 전역 개념으로 연결 + 오른쪽 패널로 펼침(커먼즈)

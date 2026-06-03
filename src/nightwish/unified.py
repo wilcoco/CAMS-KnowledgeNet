@@ -370,6 +370,11 @@ class FillBody(BaseModel):
     space: str = "public"
 
 
+class ClassifyBody(BaseModel):
+    span: str = Field(min_length=1)
+    context: str = ""
+
+
 class MintBody(BaseModel):
     account: str = Field(min_length=1)
     amount: float = Field(gt=0)
@@ -832,6 +837,41 @@ def create_app() -> FastAPI:
                 "source": _node_view(svc, node_id, body.space, full=True),
                 "target": _node_view(svc, target_slug, body.space, full=True),
             }
+
+    @app.post("/api/classify")
+    def classify(body: ClassifyBody):
+        """Suggest whether a dragged span is (a) a universal concept → commons
+        link, or (b) a context-specific elaboration → inline unfold. (노트 07 D2)
+
+        Strong signal: if the span already names a real commons concept, link it.
+        Otherwise a cheap heuristic (refined by the LLM when a real backend is on).
+        """
+        span = body.span.strip()
+        if not span:
+            raise HTTPException(400, "구절이 필요합니다")
+        svc = get_service()
+        with svc.reading():
+            ex = svc.tree.nodes.get(slugify(span))
+            if ex is not None and not ex.is_stub and ex.is_answer:
+                return {"suggestion": "concept", "existing": {"id": ex.id, "title": ex.question},
+                        "reason": f"이미 개념 '{ex.question}'으로 존재 — 연결 권장"}
+        toks = [t for t in span.split() if t]
+        short = len(toks) <= 3 and len(span) <= 14
+        suggestion = "concept" if short else "unfold"
+        reason = "짧은 명사구 — 보편 개념일 수 있음" if short else "문장형 — 이 맥락의 설명으로 보임"
+        if _ai_model != "offline-stub":          # refine with a real LLM if active
+            try:
+                ans = _ask_ai(
+                    "다음 구절이 어디서나 같은 뜻의 '보편 개념'이면 concept, 특정 맥락의 "
+                    f"설명이면 unfold — 한 단어로만 답하라.\n구절: «{span}»\n맥락: {body.context[:200]}"
+                ).strip().lower()
+                if "concept" in ans:
+                    suggestion, reason = "concept", "AI: 보편 개념으로 판단"
+                elif "unfold" in ans:
+                    suggestion, reason = "unfold", "AI: 맥락 설명으로 판단"
+            except Exception:
+                pass
+        return {"suggestion": suggestion, "reason": reason, "existing": None}
 
     @app.post("/api/nodes/{node_id}/fill")
     def fill_stub(node_id: str, body: FillBody):

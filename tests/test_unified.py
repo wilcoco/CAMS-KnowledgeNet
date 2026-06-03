@@ -305,6 +305,15 @@ def test_contextual_unfold_is_inline_and_recursive(client):
     assert bad.status_code == 400
 
 
+def test_classify_suggests_concept_vs_unfold(client):
+    assert client.post("/api/classify", json={"span": "벡터 시계"}).json()["suggestion"] == "concept"
+    assert client.post("/api/classify",
+                       json={"span": "이것이 왜 그런지 길게 설명해줘 정말로"}).json()["suggestion"] == "unfold"
+    client.post("/api/ask", json={"question": "합의 알고리즘", "author": "u"})
+    r = client.post("/api/classify", json={"span": "합의 알고리즘"}).json()
+    assert r["suggestion"] == "concept" and r["existing"]["id"] == "합의-알고리즘"
+
+
 # -- wikilinks accrue authority; economy pays dividends up the chain ---------
 def test_wikilink_authority_and_endorse_dividend(client):
     # alice links [[핵심개념]] first; bob links it later → alice's foresight (hub)
