@@ -76,6 +76,25 @@ def configure_ai() -> bool:
     return False
 
 
+def configure_embeddings() -> bool:
+    """Activate a real embedding backend for semantic search if configured.
+
+    No-op (offline deterministic embedding stays in place) unless
+    ``NIGHTWISH_ENABLE_EMBEDDINGS`` + an embeddings API key are present.
+    """
+    try:
+        from nightwish.embeddings import make_embed_fn
+        from nightwish.search import set_embedder
+
+        fn = make_embed_fn()
+        if fn is not None:
+            set_embedder(fn)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _ask_ai(question: str, prompt: str = "") -> str:
     try:
         return _ai_fn(question, prompt)
@@ -456,6 +475,7 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         configure_ai()
+        configure_embeddings()
         yield
 
     app = FastAPI(title="Nightwish — unified knowledge graph", version="1.0.0",
@@ -808,12 +828,9 @@ def create_app() -> FastAPI:
         with svc.reading():
             t = svc.tree
             # A group viewer ranks on the public commons prior + its own private
-            # endorse overlay; a public viewer sees only the commons.
-            ranked = sorted(
-                ((n, t.authority_in(n.id, space))
-                 for n in t.visible_nodes(space) if not n.is_stub),
-                key=lambda na: -na[1],
-            )
+            # endorse overlay; a public viewer sees only the commons. Memoised per
+            # write revision (docs/design/06): repeated reads are O(1).
+            ranked = t.scoreboard(space)
             hub = dict(t.scoring.hub)
             if t._is_group(space) and space in t.group_scoring:
                 for u, h in t.group_scoring[space].hub.items():
@@ -915,6 +932,7 @@ def create_app() -> FastAPI:
             first_time = svc.tree.scoring.linker_position(body.account, body.node_id) is None
             if first_time and body.account != n.author:
                 svc.tree.scoring.link(body.account, body.node_id, weight=body.amount)
+            svc.tree.bump()   # public authority changed → invalidate scoreboard memo
             return {
                 "account": body.account,
                 "balance": round(svc.econ.balance(body.account), 4),

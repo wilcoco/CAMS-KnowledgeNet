@@ -150,36 +150,54 @@ class HybridIndex:
     def _avgdl(self) -> float:
         return (self._total_len / len(self.docs)) if self.docs else 0.0
 
+    def _term_score(self, term: str, doc_id: str, idf: float, avgdl: float) -> float:
+        doc = self.docs[doc_id]
+        tf = doc.tf.get(term, 0)
+        denom = tf + self.k1 * (1.0 - self.b + self.b * doc.length / avgdl)
+        return idf * (tf * (self.k1 + 1.0)) / (denom or 1.0)
+
     def _bm25(
         self, query_terms: list[str], is_allowed: Optional[Callable[[str], bool]]
     ) -> dict[str, float]:
-        """BM25 over only the docs that contain a query term (cheap recall).
+        """BM25 over the docs that contain a query term, with WAND-style pruning.
 
-        ``is_allowed`` is checked **per posting hit** (so the membrane filter costs
-        ``O(matching docs)``, never ``O(all nodes)``).
+        Terms are processed **rarest-first** (highest idf, most selective). A
+        common term whose posting is larger than the current candidate pool only
+        **boosts existing candidates** instead of scanning its whole posting — so a
+        rare+common query costs ``O(rare postings + #candidates)``, not
+        ``O(sum of postings)``. Docs matching *only* a common term are pruned (they
+        lack the selective terms, so they can't be top-k anyway). A single-term
+        query has nothing to prune against and scans its posting in full.
+
+        ``is_allowed`` is checked per candidate, so the membrane filter never costs
+        ``O(all nodes)``.
         """
         N = len(self.docs)
         if not N:
             return {}
         avgdl = self._avgdl or 1.0
-        scores: dict[str, float] = defaultdict(float)
-        seen_terms: set[str] = set()
-        for term in query_terms:
-            if term in seen_terms:
-                continue
-            seen_terms.add(term)
-            posting = self.postings.get(term)
-            if not posting:
-                continue
-            df = len(posting)
-            idf = math.log(1.0 + (N - df + 0.5) / (df + 0.5))
-            for doc_id in posting:
-                if is_allowed is not None and not is_allowed(doc_id):
-                    continue
-                doc = self.docs[doc_id]
-                tf = doc.tf.get(term, 0)
-                denom = tf + self.k1 * (1.0 - self.b + self.b * doc.length / avgdl)
-                scores[doc_id] += idf * (tf * (self.k1 + 1.0)) / (denom or 1.0)
+        allow = is_allowed or (lambda _d: True)
+        # distinct terms, rarest (smallest df) first
+        terms = sorted(
+            {t for t in query_terms if self.postings.get(t)},
+            key=lambda t: len(self.postings[t]),
+        )
+        scores: dict[str, float] = {}
+        for term in terms:
+            posting = self.postings[term]
+            idf = math.log(1.0 + (N - len(posting) + 0.5) / (len(posting) + 0.5))
+            if not scores or len(posting) <= len(scores):
+                # walk the posting: boost existing candidates, seed new visible ones
+                for doc_id in posting:
+                    if doc_id in scores:
+                        scores[doc_id] += self._term_score(term, doc_id, idf, avgdl)
+                    elif allow(doc_id):
+                        scores[doc_id] = self._term_score(term, doc_id, idf, avgdl)
+            else:
+                # common term: only lift docs we already have (boost-only prune)
+                for doc_id in scores:
+                    if doc_id in posting:
+                        scores[doc_id] += self._term_score(term, doc_id, idf, avgdl)
         return scores
 
     def query(

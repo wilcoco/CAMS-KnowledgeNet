@@ -168,11 +168,20 @@ class OntologyTree:
     #: hybrid search index — built lazily on first search, kept incrementally
     #: fresh via ``_finalize``. Not serialised (rebuilt from nodes on load).
     _search: HybridIndex | None = field(default=None, compare=False, repr=False)
+    #: monotonic write revision — bumped on any change that affects rankings, so
+    #: read-side caches (e.g. the scoreboard) can memoise until the next write.
+    _rev: int = field(default=0, compare=False, repr=False)
+    #: space -> (rev, ranked[(node, authority)]) memo of the authority scoreboard
+    _board_cache: dict = field(default_factory=dict, compare=False, repr=False)
 
     # -- internals -------------------------------------------------------------
     def _tick(self) -> int:
         self._clock += 1
         return self._clock
+
+    def bump(self) -> None:
+        """Mark rankings dirty so read-side caches recompute on next read."""
+        self._rev += 1
 
     def _require(self, node_id: str) -> Node:
         if node_id not in self.nodes:
@@ -232,6 +241,7 @@ class OntologyTree:
         # are empty concept placeholders — excluded, like in search itself.
         if self._search is not None and not node.is_stub:
             self._search.upsert(node.id, self._doc_text(node))
+        self.bump()
 
     # -- search index ----------------------------------------------------------
     @staticmethod
@@ -634,12 +644,31 @@ class OntologyTree:
         if not self._is_group(space):
             raise OntologyError("group_endorse requires a group space")
         self._group_engine(space).link(evaluator, node_id, weight=weight)
+        self.bump()
 
     def group_linker_position(
         self, space: str, evaluator: str, node_id: str
     ) -> int | None:
         eng = self.group_scoring.get(space)
         return eng.linker_position(evaluator, node_id) if eng else None
+
+    def scoreboard(self, space: str | None = None) -> list[tuple[Node, float]]:
+        """Visible non-stub nodes ranked by ``authority_in``, memoised per write.
+
+        The O(N log N) ranking is recomputed only when the write revision changes,
+        so a burst of scoreboard reads between writes is O(1) after the first.
+        """
+        cached = self._board_cache.get(space)
+        if cached is not None and cached[0] == self._rev:
+            return cached[1]
+        ranked = sorted(
+            ((n, self.authority_in(n.id, space))
+             for n in self.nodes.values()
+             if not n.is_stub and self._visible(n, space)),
+            key=lambda na: -na[1],
+        )
+        self._board_cache[space] = (self._rev, ranked)
+        return ranked
 
     def visible_nodes(self, space: str | None = None) -> list[Node]:
         return [n for n in self.nodes.values() if self._visible(n, space)]
