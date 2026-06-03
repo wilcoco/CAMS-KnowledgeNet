@@ -313,6 +313,7 @@ class AskBody(BaseModel):
     question: str = Field(min_length=1)
     author: str = Field(min_length=1)
     space: str = "public"
+    force: bool = False  # True면 동일 채택본이 있어도 새 답을 강제 생성
 
 
 class PageBody(BaseModel):
@@ -599,6 +600,16 @@ def create_app() -> FastAPI:
             related = [_node_view(svc, n.id, body.space)
                        for n in svc.tree.search(body.question, body.space)[:5]
                        if n.is_answer]
+            # 답 난립 완화: 같은 질문(슬러그)의 '채택본'이 이미 있으면, 새 초안을
+            # 또 만들기 전에 그 답을 먼저 보여준다. force=True면 그래도 새로 생성.
+            if not body.force:
+                dup = svc.tree.nodes.get(slugify(body.question))
+                if (dup is not None and not dup.is_stub and dup.is_answer
+                        and svc.tree._visible(dup, body.space)):
+                    dup_view = _node_view(svc, dup.id, body.space, full=True)
+                    if dup_view["adopted"]:
+                        return {"stage": "existing", "node": dup_view,
+                                "related": related}
         # The AI draft is a (possibly multi-second) network call — do it WITHOUT
         # holding the lock, so the rest of the app (status poll, other users)
         # isn't frozen while a generation is in flight.
@@ -792,6 +803,13 @@ def create_app() -> FastAPI:
             )
             hubs = sorted(((u, h) for u, h in t.scoring.hub.items() if h > 0),
                           key=lambda uh: -uh[1])
+            # 채택 평가자 가시화: hub는 후속 평가자가 와야 붙지만, 평가(스테이크)
+            # 행위 자체는 즉시 인정받아야 한다 — 콜드스타트 완화.
+            evald: dict[str, float] = {}
+            for stakes in svc.econ.staked.values():
+                for u, amt in stakes.items():
+                    if amt > 0:
+                        evald[u] = evald.get(u, 0.0) + amt
             return {
                 "mode": t.scoring.mode,
                 "top_nodes": [
@@ -801,6 +819,10 @@ def create_app() -> FastAPI:
                 ],
                 "top_contributors": [
                     {"user": u, "hub": round(h, 4)} for u, h in hubs[:10]
+                ],
+                "top_evaluators": [
+                    {"user": u, "staked": round(s, 4)}
+                    for u, s in sorted(evald.items(), key=lambda us: -us[1])[:10]
                 ],
             }
 

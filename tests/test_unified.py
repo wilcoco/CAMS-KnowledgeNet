@@ -350,6 +350,34 @@ def test_unevaluated_answer_is_draft_until_endorsed(client):
     assert client.get(f"/api/nodes/{nid}").json()["adopted"] is True
 
 
+def test_ask_surfaces_adopted_duplicate_instead_of_new_draft(client):
+    """답 난립 완화: 같은 질문의 채택본이 있으면 새 초안 대신 그 답을 보여준다."""
+    nid = client.post("/api/ask", json={"question": "CRDT가 뭐야", "author": "a"}).json()["node"]["id"]
+    # 평가받기 전(초안)에는 같은 질문도 새 답을 생성
+    r1 = client.post("/api/ask", json={"question": "CRDT가 뭐야", "author": "b"}).json()
+    assert r1["stage"] == "ai" and r1["node"]["id"] != nid
+    # 평가하면 채택본이 됨
+    client.post("/api/mint", json={"account": "c", "amount": 50})
+    client.post("/api/endorse", json={"account": "c", "node_id": nid, "amount": 10})
+    # 이제 같은 질문은 새 초안 대신 채택본을 보여줌
+    r2 = client.post("/api/ask", json={"question": "CRDT가 뭐야", "author": "d"}).json()
+    assert r2["stage"] == "existing" and r2["node"]["id"] == nid
+    # force=True면 그래도 새로 생성
+    r3 = client.post("/api/ask", json={"question": "CRDT가 뭐야", "author": "d", "force": True}).json()
+    assert r3["stage"] == "ai" and r3["node"]["id"] != nid
+
+
+def test_scores_surfaces_first_evaluator_even_with_zero_hub(client):
+    """콜드스타트 완화: 첫/단독 평가자는 hub가 0이어도 평가자 랭킹에 즉시 노출."""
+    nid = client.post("/api/ask", json={"question": "평가대상", "author": "author"}).json()["node"]["id"]
+    client.post("/api/mint", json={"account": "ev1", "amount": 50})
+    client.post("/api/endorse", json={"account": "ev1", "node_id": nid, "amount": 10})
+    sc = client.get("/api/scores").json()
+    assert sc["top_contributors"] == [] or all(u["user"] != "ev1" for u in sc["top_contributors"])
+    evs = {u["user"]: u["staked"] for u in sc["top_evaluators"]}
+    assert "ev1" in evs and evs["ev1"] > 0
+
+
 def test_expand_creates_linked_concept_with_ai_answer(client):
     """드래그한 내용을 AI에게 물어 연결된 개념 노드로 만든다."""
     src = client.post("/api/ask", json={"question": "범퍼 생산 공정", "author": "u"}).json()["node"]["id"]
