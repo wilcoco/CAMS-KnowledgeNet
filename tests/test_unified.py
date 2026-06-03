@@ -264,6 +264,24 @@ def test_group_endorse_reranks_only_inside_the_group(client):
     assert order("team-b") == [a]            # another group is unaffected
 
 
+def test_fill_stub_with_ai_keeps_the_slug(client):
+    # a wikilink auto-creates an empty concept; the fill button writes its AI
+    # summary in place, keeping the slug so links still resolve.
+    client.post("/api/nodes", json={"title": "문서", "body": "우리는 [[벡터 시계]]를 쓴다",
+                                     "author": "a"})
+    stub = client.get("/api/nodes/벡터-시계").json()
+    assert stub["is_stub"] and stub["answer"] == ""
+    r = client.post("/api/nodes/벡터-시계/fill", json={"author": "bob"})
+    assert r.status_code == 200
+    j = r.json()
+    assert not j["is_stub"] and j["frozen"] and j["space"] == "public"
+    assert j["answer"]                                   # AI text written
+    # idempotent guard + now discoverable in search (was excluded as a stub)
+    assert client.post("/api/nodes/벡터-시계/fill", json={"author": "x"}).status_code == 409
+    assert "벡터-시계" in {h["id"] for h in
+                          client.get("/api/search", params={"q": "벡터"}).json()}
+
+
 # -- wikilinks accrue authority; economy pays dividends up the chain ---------
 def test_wikilink_authority_and_endorse_dividend(client):
     # alice links [[핵심개념]] first; bob links it later → alice's foresight (hub)

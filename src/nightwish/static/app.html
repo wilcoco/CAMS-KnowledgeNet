@@ -346,6 +346,9 @@ function renderNode(n){
     <div class="row"><input id="end-amt" type="number" value="10" style="width:80px"/>
       <button id="btn-endorse" class="sec" title="이 답에 동의·스테이크하고 배당받기 (평가=저작)">평가 (스테이크+배당)</button>
       <span class="prov" id="end-out"></span></div>` : '';
+  const stubFill = n.is_stub ? `
+    <div class="row"><button id="btn-fill">🪄 AI로 이 개념 채우기</button>
+      <span class="prov" id="fill-out"></span></div>` : '';
   c.innerHTML = `
     <div class="node-head">
       <h3>${esc(n.title)}</h3>
@@ -356,8 +359,10 @@ function renderNode(n){
     </div>
     <div class="prov">${prov} · 권위 ${n.authority} · 스테이크 ${n.staked}</div>
     ${coauthorsHTML(n.coauthors)}
-    ${n.is_query ? '' : `<div class="answer">${renderText(n.answer)}</div>`}
-    ${queryAnswer}${endorse}
+    ${n.is_query ? '' : (n.is_stub
+      ? `<div class="answer prov">아직 비어 있는 개념입니다 — 위키링크로 자리만 잡혔어요. 아래 버튼으로 AI 정리를 생성하세요.</div>`
+      : `<div class="answer">${renderText(n.answer)}</div>`)}
+    ${queryAnswer}${endorse}${stubFill}
     ${n.outlinks && n.outlinks.length ? `<div class="prov">연결: ${
       n.outlinks.map(o=>`<a class="ol" data-oid="${esc(o.id)}">${esc(o.title)}</a>`).join(', ')
     }</div>`:''}
@@ -406,6 +411,16 @@ function renderNode(n){
           {author:me(), body:$('#q-htext').value, space:space()});
         await refreshStat(); openNode(n.id);
       };
+    };
+  }
+  if (n.is_stub){
+    $('#btn-fill').onclick = async (ev)=>{
+      try{
+        await withBusy('AI가 개념을 정리하는 중…',
+          ()=> api('POST',`/api/nodes/${encodeURIComponent(n.id)}/fill`,
+            {author:me(), space:space()}), ev.currentTarget);
+        await refreshStat(); loadScores(); openNode(n.id);
+      }catch(e){ $('#fill-out').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
     };
   }
   if (!n.is_query && !n.is_stub){

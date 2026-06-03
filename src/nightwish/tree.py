@@ -585,6 +585,25 @@ class OntologyTree:
         node.answered_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         return node
 
+    def fill_stub(self, node_id: str, answer: str, author: str, model: str) -> Node:
+        """Fill an empty concept (stub) with an answer **in place**.
+
+        The slug/address is preserved, so every ``[[Title]]`` that pointed here
+        keeps resolving to the same concept — the stub simply graduates from an
+        empty placeholder to a real ROOT answer. (docs/design/05: a concept is
+        always public commons, so it stays in its public space.)
+        """
+        node = self._require(node_id)
+        if not node.is_stub:
+            raise OntologyError(f"node {node_id!r} is already filled")
+        node.action = Action.ROOT
+        node.answer = answer
+        node.author = author
+        node.last_editor = author
+        self._finalize(node)          # wire wikilinks, index, bump
+        self.mark_answered(node_id, model)
+        return node
+
     def edit(self, node_id: str, answer: str, editor: str) -> Node:
         """Edit a node's answer in place (rejected once frozen)."""
         node = self._require(node_id)

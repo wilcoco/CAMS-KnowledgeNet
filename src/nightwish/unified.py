@@ -363,6 +363,11 @@ class AnswerBody(BaseModel):
     space: str = "public"
 
 
+class FillBody(BaseModel):
+    author: str = Field(min_length=1)
+    space: str = "public"
+
+
 class MintBody(BaseModel):
     account: str = Field(min_length=1)
     amount: float = Field(gt=0)
@@ -780,6 +785,31 @@ def create_app() -> FastAPI:
                 "source": _node_view(svc, node_id, body.space, full=True),
                 "target": _node_view(svc, target_slug, body.space, full=True),
             }
+
+    @app.post("/api/nodes/{node_id}/fill")
+    def fill_stub(node_id: str, body: FillBody):
+        """Fill an empty concept (stub) with an AI answer, in place.
+
+        A ``[[wikilink]]`` auto-creates an empty concept; this is the button that
+        asks the AI to write its canonical summary without changing the slug, so
+        every link that pointed here keeps resolving to the same concept.
+        """
+        svc = get_service()
+        with svc.reading():
+            n = svc.tree.nodes.get(node_id)
+            if n is None:
+                raise HTTPException(404, f"node {node_id!r} not found")
+            if not n.is_stub:
+                raise HTTPException(409, "이미 채워진 개념입니다")
+            question = n.question
+        # AI draft is a (slow) network call — do it outside the write lock.
+        text = _ask_ai(question)
+        with svc.writing():
+            n = svc.tree.nodes.get(node_id)
+            if n is None or not n.is_stub:
+                raise HTTPException(409, "이미 채워진 개념입니다")
+            svc.tree.fill_stub(node_id, text, body.author, _ai_model)
+            return _node_view(svc, node_id, body.space, full=True)
 
     @app.get("/api/queries")
     def list_queries(space: str = "public"):
