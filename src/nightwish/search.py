@@ -38,20 +38,24 @@ _CJK_RE = re.compile(r"[가-힣]")
 
 
 def tokenize(text: str) -> list[str]:
-    """Lowercased word tokens + CJK character bigrams (order-free recall).
+    """Lowercased word tokens + CJK character **bigrams** (order-free recall).
 
-    ``"벡터 시계"`` → ``["벡터", "시계", "벡", "벡터", "터", ...]``-ish: each CJK run
-    yields its unigrams and bigrams so partial Korean matches still hit, without a
-    morphological analyser.
+    ``"벡터 시계"`` → ``["벡터", "터시"... no]`` — each CJK run yields its overlapping
+    *bigrams* (``"벡터"`` → ``벡터``; ``"캘리브레이션"`` → ``캘리, 리브, 브레, …``) so
+    partial Korean matches hit without a morphological analyser. Unigrams are
+    **not** indexed: a single shared character (``브``) is far too unselective and
+    produces false matches. A length-1 CJK run keeps its unigram so single-
+    character concepts stay findable.
     """
     text = (text or "").lower()
     out: list[str] = []
     for m in _WORD_RE.finditer(text):
         tok = m.group(0)
         if _CJK_RE.match(tok):
-            # CJK run → unigrams + bigrams
-            out.extend(tok)
-            out.extend(tok[i:i + 2] for i in range(len(tok) - 1))
+            if len(tok) == 1:
+                out.append(tok)
+            else:
+                out.extend(tok[i:i + 2] for i in range(len(tok) - 1))
         else:
             out.append(tok)
     return out

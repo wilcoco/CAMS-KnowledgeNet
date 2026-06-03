@@ -7,8 +7,18 @@ from nightwish.tree import OntologyTree
 # -- engine ----------------------------------------------------------------- #
 def test_tokenize_cjk_bigrams_and_words():
     toks = tokenize("벡터 Clock-42")
-    assert "벡터" in toks and "벡" in toks and "터" in toks   # CJK unigram+bigram
+    assert "벡터" in toks                                      # CJK bigram
+    assert "벡" not in toks and "터" not in toks               # no noisy unigrams
     assert "clock" in toks and "42" in toks                   # ascii words, lowered
+    assert tokenize("각")[0] == "각"                           # 1-char run keeps unigram
+
+
+def test_no_single_char_cross_match():
+    # "조브플럭스" and "캘리브레이션" share only the char '브' — must NOT match
+    idx = HybridIndex()
+    idx.upsert("a", "조브플럭스 시스템")
+    idx.upsert("b", "캘리브레이션 절차")
+    assert [d for d, _ in idx.query("조브플럭스")] == ["a"]
 
 
 def test_bm25_ranks_term_overlap_and_is_incremental():

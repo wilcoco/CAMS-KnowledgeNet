@@ -145,6 +145,37 @@ def run(scale: float, seed: int = 7) -> int:
         a_top1 = (_scores("team-a", c, st)["top_nodes"] or [{}])[0].get("id")
         pub_top1 = (pub0 := _scores("public", c, st)["top_nodes"]) and pub0[0].get("id")
 
+        # 6) 검색 베타 — 고유 needle 개념 + 그룹 전용 needle 기여
+        pub_needle = st.rec(c.post("/api/ask", json={
+            "question": "특이공정 제니퍼위젯 캘리브레이션", "author": users[0]}))
+        pub_needle_id = pub_needle["node"]["id"] if pub_needle else None
+        host = rng.choice(concept_ids)         # 공용 개념에 그룹 전용 기여를 단다
+        st.rec(c.post(f"/api/nodes/{host}/contribute", json={
+            "kind": "comment", "author": "lab-x-user",
+            "body": "사내전용 키워드 조브플럭스 메모", "space": "lab-x"}))
+
+        def search(q, sp):
+            return [h["id"] for h in (st.rec(c.get("/api/search",
+                    params={"q": q, "space": sp})) or [])]
+
+        # 6a) 공용 needle: 부분일치로 발견되나
+        s_find = search("제니퍼위젯", "public")
+        # 6b) 막: 그룹 전용 키워드는 그 그룹 검색에만(루트로 롤업), public엔 없음
+        s_pub_leak = search("조브플럭스", "public")
+        s_grp_hit = search("조브플럭스", "lab-x")
+        # 6c) 검색 재정렬: team-a가 needle을 사적 endorse → team-a 검색 상위로
+        if pub_needle_id:
+            for i in range(8):
+                st.rec(c.post("/api/endorse", json={"account": f"sn{i}",
+                        "node_id": pub_needle_id, "amount": 9.0, "space": "team-a"}))
+        # 6d) 검색 지연(현 코퍼스): 평균 µs
+        terms = [rng.choice(CONCEPT_WORDS) + " " + rng.choice(CONCEPT_WORDS)
+                 for _ in range(200)]
+        ts = time.time()
+        for q in terms:
+            st.rec(c.get("/api/search", params={"q": q, "space": "public"}))
+        search_us = (time.time() - ts) / len(terms) * 1e6
+
         elapsed = time.time() - t0
 
         # ---- 불변식 검증 ----------------------------------------------------
@@ -206,6 +237,22 @@ def run(scale: float, seed: int = 7) -> int:
         if abs(spot_b - b_before) > 1e-9:
             fails.append(f"스포트라이트: team-b 누수 ({b_before}→{spot_b})")
 
+        # (G) 검색 베타 검증
+        if pub_needle_id and pub_needle_id not in s_find:
+            fails.append(f"검색: 공용 needle 부분일치 실패 ({s_find})")
+        if s_pub_leak:
+            fails.append(f"검색 막 위반: 그룹 키워드가 public 검색에 노출 ({s_pub_leak})")
+        if host not in s_grp_hit:
+            fails.append(f"검색 롤업/그룹가시 실패: lab-x에서 host 미발견 ({s_grp_hit})")
+        if pub_needle_id:
+            rank_pub = search("특이공정 캘리브레이션", "public")
+            rank_a = search("특이공정 캘리브레이션", "team-a")
+            # team-a 검색에서 needle이 public보다 앞서야(사적 endorse 재정렬)
+            ia = rank_a.index(pub_needle_id) if pub_needle_id in rank_a else 1e9
+            ip = rank_pub.index(pub_needle_id) if pub_needle_id in rank_pub else 1e9
+            if not (ia <= ip):
+                fails.append(f"검색 재정렬 실패: team-a {ia} > public {ip}")
+
         # (E) 영속 라운드트립: pgstore 정규화 라운드트립이 손실 없는가
         svc = unified.get_service()
         snap = svc._snapshot()
@@ -235,13 +282,15 @@ def run(scale: float, seed: int = 7) -> int:
     print(f"그룹 재정렬 발생: {reranked}/{len(P['groups'])} 그룹이 public과 다른 순위")
     print(f"스포트라이트({spot}): team-a +{spot_gain_a:.0f} → a={spot_a:.1f} "
           f"| public {pub_before:.1f}→{spot_pub:.1f} · team-b {b_before:.1f}→{spot_b:.1f} (불변)")
+    print(f"검색: needle 발견={bool(pub_needle_id and pub_needle_id in s_find)} "
+          f"· 그룹키워드 public누수={bool(s_pub_leak)} · 평균 지연={search_us:.0f}us/질의")
     print("-" * 64)
     if fails:
         print("❌ 불변식 위반:")
         for f in fails:
             print("   -", f)
     else:
-        print("✅ 모든 불변식 통과: 막 · 비태환 · 국소재정렬 · 무결성 · 영속")
+        print("✅ 모든 불변식 통과: 막 · 비태환 · 국소재정렬 · 검색 · 무결성 · 영속")
     print("=" * 64)
     return 1 if (fails or st.errors) else 0
 
