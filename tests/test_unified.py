@@ -305,6 +305,21 @@ def test_contextual_unfold_is_inline_and_recursive(client):
     assert bad.status_code == 400
 
 
+def test_promote_unfold_to_commons_concept_as_draft(client):
+    nid = client.post("/api/ask", json={"question": "분산 합의", "author": "u"}).json()["node"]["id"]
+    u = client.post(f"/api/nodes/{nid}/contribute",
+                    json={"kind": "unfold", "author": "u", "anchor": "정족수",
+                          "body": "정족수란"}).json()["unfolds"][0]
+    r = client.post(f"/api/nodes/{u['id']}/promote", json={"author": "u"}).json()
+    # promoted concept is public commons and enters as a DRAFT (re-stake gate)
+    assert r["created"] and r["concept"]["space"] == "public" and r["concept"]["adopted"] is False
+    # the parent's span now also links to the commons concept (dual nature)
+    pv = client.get(f"/api/nodes/{nid}").json()
+    assert r["concept"]["id"] in [o["id"] for o in pv["outlinks"]]
+    # only contextual unfolds can be promoted
+    assert client.post(f"/api/nodes/{nid}/promote", json={"author": "u"}).status_code == 400
+
+
 def test_classify_suggests_concept_vs_unfold(client):
     assert client.post("/api/classify", json={"span": "벡터 시계"}).json()["suggestion"] == "concept"
     assert client.post("/api/classify",

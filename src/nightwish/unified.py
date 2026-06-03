@@ -375,6 +375,11 @@ class ClassifyBody(BaseModel):
     context: str = ""
 
 
+class PromoteBody(BaseModel):
+    author: str = Field(min_length=1)
+    space: str = "public"
+
+
 class MintBody(BaseModel):
     account: str = Field(min_length=1)
     amount: float = Field(gt=0)
@@ -872,6 +877,41 @@ def create_app() -> FastAPI:
             except Exception:
                 pass
         return {"suggestion": suggestion, "reason": reason, "existing": None}
+
+    @app.post("/api/nodes/{node_id}/promote")
+    def promote(node_id: str, body: PromoteBody):
+        """Promote a contextual unfold (b) into a universal concept (a). (노트 07)
+
+        Re-stake, not convert: the new commons concept enters as a **draft**
+        (unstaked) and must earn adoption afresh — the existing 초안→채택 gate. The
+        parent's span gains a commons link, so it is now *both* an inline unfold
+        and a shared concept. One-way (local→global).
+        """
+        svc = get_service()
+        with svc.writing():
+            u = svc.tree.nodes.get(node_id)
+            if u is None:
+                raise HTTPException(404, f"node {node_id!r} not found")
+            if not u.is_unfold:
+                raise HTTPException(400, "맥락 펼침만 보편 개념으로 승격할 수 있습니다")
+            title = (u.question or u.anchor).strip()
+            slug = slugify(title)
+            concept = svc.tree.nodes.get(slug)
+            created = False
+            if concept is None or concept.is_stub:
+                if concept is not None:                 # promote an empty stub
+                    del svc.tree.nodes[slug]
+                svc.tree.add_root(slug, title, u.answer, body.author)
+                svc.tree.mark_answered(slug, u.model or _ai_model)
+                created = True
+            # link the parent's span → the commons concept (relationship only)
+            parent = svc.tree.nodes.get(u.parent_id) if u.parent_id else None
+            if parent is not None and slug != parent.id and slug not in parent.links:
+                parent.links.append(slug)
+                svc.tree.scoring.link(body.author, slug, weight=1.0)
+                svc.tree.bump()
+            return {"concept": _node_view(svc, slug, body.space, full=True),
+                    "parent_id": u.parent_id, "created": created}
 
     @app.post("/api/nodes/{node_id}/fill")
     def fill_stub(node_id: str, body: FillBody):
