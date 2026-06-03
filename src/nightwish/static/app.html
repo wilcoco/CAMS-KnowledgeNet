@@ -20,10 +20,21 @@
     border:1px solid var(--line); border-radius:6px; padding:7px 9px; font:inherit; }
   .grid { display:grid; grid-template-columns:340px 1fr 270px; gap:0;
           height:calc(100vh - 51px); }
-  aside, .center { overflow:auto; padding:12px; }
+  aside { overflow:auto; padding:12px; }
   aside { border-right:1px solid var(--line); }
   aside.right { border-right:0; border-left:1px solid var(--line); }
-  @media (max-width:880px){ .grid { grid-template-columns:1fr; height:auto; } }
+  /* CENTER = horizontal stack of sliding panes (Roam/Matuschak식): 링크를 따라가면
+     우측으로 새 패널이 쌓여 읽기 흐름이 끊기지 않는다. */
+  .center { overflow-x:auto; overflow-y:hidden; padding:0; display:flex; align-items:stretch; }
+  .pane { flex:0 0 clamp(340px, 44vw, 560px); overflow-y:auto; padding:12px 14px;
+          border-right:1px solid var(--line); position:relative; }
+  .pane.active { box-shadow: inset 3px 0 0 var(--acc); }
+  .pane-close { position:absolute; top:8px; right:10px; background:none; color:var(--mut);
+                font-size:16px; padding:0 4px; cursor:pointer; }
+  .crumbs { font-size:11px; color:var(--mut); margin-bottom:6px; }
+  .crumbs a { color:var(--link); cursor:pointer; }
+  @media (max-width:880px){ .grid { grid-template-columns:1fr; height:auto; }
+    .pane { flex-basis:88vw; } }
   h2.sec { font-size:11px; color:var(--acc); text-transform:uppercase;
            letter-spacing:.5px; margin:16px 0 6px; }
   button { background:var(--acc); color:#0a0c10; border:0; border-radius:6px;
@@ -191,11 +202,6 @@ let current = null;
 function renderText(t){
   return esc(t).replace(/\[\[([^\]]+)\]\]/g, (_,n)=>`<a class="wl" data-link="${esc(n)}">${esc(n)}</a>`);
 }
-function wireLinks(el){
-  el.querySelectorAll('a.wl').forEach(a=>a.onclick=()=>{
-    $('#search').value = a.dataset.link; doSearch();
-  });
-}
 
 async function refreshStat(){
   const s = await api('GET','/api/state');
@@ -256,7 +262,7 @@ async function doAsk(force){
       btn.className = 'sec'; btn.textContent = '그래도 새로 묻기';
       btn.onclick = ()=> doAsk(true);
       banner.appendChild(btn);
-      $('#center').prepend(banner);
+      if (panes().firstChild) panes().firstChild.prepend(banner);
     }
     // 관련 기존 답이 있으면 밑의 검색 결과 패널에 함께 노출
     const box = $('#results'); box.innerHTML = '';
@@ -276,9 +282,51 @@ async function loadQueries(){
   qs.forEach(n => box.appendChild(nodeItem(n)));
 }
 
-async function openNode(id){
-  const n = await api('GET',`/api/nodes/${encodeURIComponent(id)}?space=${space()}`);
-  renderNode(n);
+// -- sliding panes: a left→right trail of concept panes ----------------------
+// Following a link never replaces what you were reading: it opens the target as
+// a NEW pane to the right (truncating anything further right), so the reading
+// flow — the chain of concepts — stays visible. (docs/design: 06 navigation)
+let trail = [];                         // node ids, oldest(left) → newest(right)
+const panes = () => $('#center');
+const paneIndexOf = el => [...panes().children].indexOf(el);
+const fetchNode = id => api('GET',`/api/nodes/${encodeURIComponent(id)}?space=${space()}`);
+
+async function openNode(id){            // start a FRESH trail (left list / search / scores)
+  panes().innerHTML = ''; trail = [];
+  await pushPane(id);
+}
+function renderNode(n){                 // fresh trail from an already-fetched node object
+  panes().innerHTML = ''; trail = [n.id];
+  focusPane(addPaneEl(n));
+}
+async function pushPane(id, afterEl){   // open `id` as a new pane right of `afterEl`
+  if (afterEl){
+    const i = paneIndexOf(afterEl);
+    while (panes().children.length > i + 1){ panes().lastChild.remove(); trail.pop(); }
+  }
+  const n = await fetchNode(id);
+  trail.push(n.id);
+  const pane = addPaneEl(n);
+  focusPane(pane);
+  pane.scrollIntoView({behavior:'smooth', inline:'end', block:'nearest'});
+}
+function addPaneEl(n){
+  const pane = document.createElement('div');
+  pane.className = 'pane'; pane.dataset.nodeId = n.id;
+  pane.onmousedown = ()=> focusPane(pane);
+  panes().appendChild(pane);
+  fillPane(n, pane);
+  return pane;
+}
+function focusPane(pane){
+  panes().querySelectorAll('.pane.active').forEach(p=>p.classList.remove('active'));
+  if (pane){ pane.classList.add('active'); current = pane._node; }
+}
+async function refreshPane(pane){ fillPane(await fetchNode(pane.dataset.nodeId), pane); }
+function closePane(pane){               // close this pane and everything to its right
+  const i = paneIndexOf(pane);
+  while (panes().children.length > i){ panes().lastChild.remove(); trail.pop(); }
+  focusPane(panes().lastChild);
 }
 
 function threadHTML(list){
@@ -307,7 +355,7 @@ function threadHTML(list){
       <div class="body">${renderText(c.body)}</div>
       ${evalCtrl}
       ${actbar(c.id)}
-      <div class="reply" id="reply-${c.id}"></div>
+      <div class="reply" data-rid="${esc(c.id)}"></div>
       ${threadHTML(c.replies)}
     </div>`;
   }).join('') + '</div>';
@@ -332,24 +380,24 @@ function coauthorsHTML(list){
   return `<div class="prov">저작: ${chips}</div>`;
 }
 
-function renderNode(n){
-  current = n;
-  const c = $('#center');
+function fillPane(n, c){
+  c._node = n; c.dataset.nodeId = n.id;
   const prov = n.frozen
     ? `AI 답변 · <code>${esc(n.model)}</code> · ${esc(n.answered_at)} (동결 — 편집은 기여로)`
     : `${esc(n.author)} 작성 · 최근 편집 ${esc(n.last_editor)}`;
   const queryAnswer = n.is_query ? `
-    <div class="row"><button id="q-ai">AI가 답하기</button>
-      <button class="sec" id="q-human">사람이 답하기</button></div>
-    <div id="q-answer"></div>` : '';
+    <div class="row"><button class="q-ai">AI가 답하기</button>
+      <button class="sec q-human">사람이 답하기</button></div>
+    <div class="q-answer"></div>` : '';
   const endorse = (!n.is_query && !n.is_stub) ? `
-    <div class="row"><input id="end-amt" type="number" value="10" style="width:80px"/>
-      <button id="btn-endorse" class="sec" title="이 답에 동의·스테이크하고 배당받기 (평가=저작)">평가 (스테이크+배당)</button>
-      <span class="prov" id="end-out"></span></div>` : '';
+    <div class="row"><input class="end-amt" type="number" value="10" style="width:80px"/>
+      <button class="sec btn-endorse" title="이 답에 동의·스테이크하고 배당받기 (평가=저작)">평가 (스테이크+배당)</button>
+      <span class="prov end-out"></span></div>` : '';
   const stubFill = n.is_stub ? `
-    <div class="row"><button id="btn-fill">🪄 AI로 이 개념 채우기</button>
-      <span class="prov" id="fill-out"></span></div>` : '';
+    <div class="row"><button class="btn-fill">🪄 AI로 이 개념 채우기</button>
+      <span class="prov fill-out"></span></div>` : '';
   c.innerHTML = `
+    <button class="pane-close" title="이 패널(과 오른쪽)을 닫기">×</button>
     <div class="node-head">
       <h3>${esc(n.title)}</h3>
       ${n.is_query?'<span class="badge query">열린 질의</span>':''}
@@ -369,16 +417,27 @@ function renderNode(n){
     ${n.backlinks && n.backlinks.length ? `<div class="prov">백링크: ${
       n.backlinks.map(b=>`<a class="wl" data-link="${esc(b.title)}">${esc(b.title)}</a>`).join(', ')
     }</div>`:''}
-    <div class="prov" style="margin-top:4px">💡 본문에서 단어·문장을 드래그하면 AI에게 묻고 연결할 수 있어요.</div>
+    <div class="prov" style="margin-top:4px">💡 본문에서 단어·문장을 드래그하면 AI에게 묻고 연결할 수 있어요. · 링크를 누르면 오른쪽에 펼쳐집니다.</div>
     <h2 class="sec">스레드 — 이 슬롯에 무엇이든 재귀로 붙습니다</h2>
     ${actbar(n.id)}
-    <div class="reply" id="reply-${n.id}"></div>
+    <div class="reply" data-rid="${esc(n.id)}"></div>
     ${threadHTML(n.thread || [])}`;
-  wireLinks(c);
-  c.querySelectorAll('.ol').forEach(a => a.onclick = ()=> openNode(a.dataset.oid));
+
+  c.querySelector('.pane-close').onclick = ()=> closePane(c);
+
+  // 링크는 *오른쪽 새 패널*로 펼친다(흐름 보존). 본문 [[wikilink]]는 제목→id를
+  // outlink/backlink 맵으로 해소; 못 찾으면 검색으로 폴백.
+  const linkMap = {};
+  (n.outlinks||[]).concat(n.backlinks||[]).forEach(o => { if (o.id) linkMap[o.title] = o.id; });
+  c.querySelectorAll('.ol').forEach(a => a.onclick = ()=> pushPane(a.dataset.oid, c));
+  c.querySelectorAll('a.wl').forEach(a => a.onclick = ()=> {
+    const id = linkMap[a.dataset.link];
+    if (id) pushPane(id, c);
+    else { $('#search').value = a.dataset.link; doSearch(); }
+  });
+
   c.querySelectorAll('button[data-act]').forEach(b =>
-    b.onclick = ()=> showReply(b.dataset.id, b.dataset.act));
-  // 스레드 안 모든 답(후속 답 포함)의 평가 버튼
+    b.onclick = ()=> showReply(b.dataset.id, b.dataset.act, c));
   c.querySelectorAll('.eval-btn').forEach(b =>
     b.onclick = async ()=>{
       const row = b.closest('.eval-row');
@@ -390,67 +449,70 @@ function renderNode(n){
         out.textContent = r.balance===undefined
           ? `사적 평가(${r.space}) · 그룹 권위 ${r.group_authority}`
           : `잔액 ${r.balance} · 배당 ${JSON.stringify(r.payouts)}`;
-        loadLedger(); loadScores(); openNode(current.id);
+        loadLedger(); loadScores(); refreshPane(c);
       }catch(e){ out.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
     });
   if (n.is_query){
-    $('#q-ai').onclick = async (ev)=>{
+    c.querySelector('.q-ai').onclick = async (ev)=>{
       try {
         await withBusy('AI가 답변을 생성하는 중…',
           ()=> api('POST',`/api/queries/${encodeURIComponent(n.id)}/answer`,
             {author:me(), ai:true, space:space()}), ev.currentTarget);
-        await refreshStat(); openNode(n.id);
+        await refreshStat(); refreshPane(c);
       } catch(e){ alert('AI 답변 실패: ' + e.message); }
     };
-    $('#q-human').onclick = ()=> {
-      $('#q-answer').innerHTML =
-        `<textarea id="q-htext" rows="3" style="width:100%;margin-top:6px" placeholder="답변"></textarea>
-         <div class="row"><button id="q-hsave">답변 저장</button></div>`;
-      $('#q-hsave').onclick = async ()=>{
+    c.querySelector('.q-human').onclick = ()=> {
+      c.querySelector('.q-answer').innerHTML =
+        `<textarea class="q-htext" rows="3" style="width:100%;margin-top:6px" placeholder="답변"></textarea>
+         <div class="row"><button class="q-hsave">답변 저장</button></div>`;
+      c.querySelector('.q-hsave').onclick = async ()=>{
         await api('POST',`/api/queries/${encodeURIComponent(n.id)}/answer`,
-          {author:me(), body:$('#q-htext').value, space:space()});
-        await refreshStat(); openNode(n.id);
+          {author:me(), body:c.querySelector('.q-htext').value, space:space()});
+        await refreshStat(); refreshPane(c);
       };
     };
   }
   if (n.is_stub){
-    $('#btn-fill').onclick = async (ev)=>{
+    c.querySelector('.btn-fill').onclick = async (ev)=>{
       try{
         await withBusy('AI가 개념을 정리하는 중…',
           ()=> api('POST',`/api/nodes/${encodeURIComponent(n.id)}/fill`,
             {author:me(), space:space()}), ev.currentTarget);
-        await refreshStat(); loadScores(); openNode(n.id);
-      }catch(e){ $('#fill-out').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+        await refreshStat(); loadScores(); refreshPane(c);
+      }catch(e){ c.querySelector('.fill-out').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
     };
   }
   if (!n.is_query && !n.is_stub){
-    $('#btn-endorse').onclick = async ()=>{
+    c.querySelector('.btn-endorse').onclick = async ()=>{
+      const out = c.querySelector('.end-out');
       try{
         const r = await api('POST','/api/endorse',
-          {account:me(), node_id:n.id, amount:Number($('#end-amt').value), space:space()});
-        $('#end-out').textContent = r.balance===undefined
+          {account:me(), node_id:n.id, amount:Number(c.querySelector('.end-amt').value), space:space()});
+        out.textContent = r.balance===undefined
           ? `사적 평가(${r.space}) · 그룹 권위 ${r.group_authority}`
           : `잔액 ${r.balance} · 배당 ${JSON.stringify(r.payouts)}`;
-        loadLedger(); loadScores(); openNode(n.id);
-      }catch(e){ $('#end-out').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+        loadLedger(); loadScores(); refreshPane(c);
+      }catch(e){ out.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
     };
   }
 }
 
-function showReply(id, act){
-  // getElementById (not querySelector) — ids can contain ::, ~, . which break CSS selectors
-  const box = document.getElementById('reply-'+id);
+function showReply(id, act, pane){
+  // find the reply box within THIS pane (ids can repeat across panes; ::,~,. also
+  // break CSS id selectors, so match data-rid by value)
+  const box = [...pane.querySelectorAll('.reply')].find(r => r.dataset.rid === id);
+  if (!box) return;
   const ph = {comment:'보강할 의견', fork:'정정 또는 다른 답', followup:'후속 질문'}[act];
   const goLabel = act==='followup' ? 'AI에게 묻기' : '보내기';
   box.innerHTML = `<textarea placeholder="${ph}"></textarea>
     <div class="row"><button data-go>${goLabel}</button>
       <button class="sec" data-cancel>취소</button></div>`;
   const goBtn = box.querySelector('[data-go]');
-  goBtn.onclick = ()=> submitContrib(id, act, box.querySelector('textarea').value, goBtn);
+  goBtn.onclick = ()=> submitContrib(id, act, box.querySelector('textarea').value, goBtn, pane);
   box.querySelector('[data-cancel]').onclick = ()=> box.innerHTML='';
 }
 
-async function submitContrib(id, kind, body, btn){
+async function submitContrib(id, kind, body, btn, pane){
   // a follow-up asks the AI for a fresh answer → slow; the rest are instant
   const msg = kind==='followup' ? 'AI가 후속 답변을 생성하는 중…' : '처리 중…';
   try{
@@ -458,7 +520,7 @@ async function submitContrib(id, kind, body, btn){
       ()=> api('POST',`/api/nodes/${encodeURIComponent(id)}/contribute`,
         {kind, author:me(), body, space:space()}), btn);
     await refreshStat(); loadScores();
-    openNode(current.id);  // re-render whole thread from the root in view
+    refreshPane(pane);   // re-render this pane's thread in place (flow preserved)
   }catch(e){ alert(e.message); }
 }
 
@@ -487,6 +549,7 @@ async function loadLedger(){
 }
 
 // -- 본문 드래그 → AI에게 묻고 연결 ------------------------------------------
+let selPane = null;                                    // 선택이 일어난 패널
 document.addEventListener('mouseup', e=>{
   const pop = $('#sel-pop');
   if (e.target.closest('#sel-pop')) return;            // 팝업 안 클릭은 무시
@@ -494,9 +557,11 @@ document.addEventListener('mouseup', e=>{
   const text = sel ? sel.toString().trim() : '';
   const anchorEl = sel && sel.anchorNode
     ? (sel.anchorNode.nodeType===3 ? sel.anchorNode.parentElement : sel.anchorNode) : null;
-  if (!text || !current || current.is_query || !anchorEl || !anchorEl.closest('.answer')){
+  const pane = anchorEl ? anchorEl.closest('.pane') : null;
+  if (!text || !pane || !pane._node || pane._node.is_query || !anchorEl.closest('.answer')){
     pop.style.display='none'; return;
   }
+  selPane = pane;
   const r = sel.getRangeAt(0).getBoundingClientRect();
   pop.style.left = (window.scrollX + r.left) + 'px';
   pop.style.top  = (window.scrollY + r.bottom + 6) + 'px';
@@ -507,13 +572,15 @@ document.addEventListener('mouseup', e=>{
 $('#sel-close').onclick = ()=> $('#sel-pop').style.display='none';
 $('#sel-ask').onclick = async ()=>{
   const q = $('#sel-q').value.trim();
-  if (!q || !current) return;
+  if (!q || !selPane || !selPane.isConnected) return;
   try{
     const r = await withBusy('AI에게 묻고 연결 중…',
-      ()=> api('POST',`/api/nodes/${encodeURIComponent(current.id)}/expand`,
+      ()=> api('POST',`/api/nodes/${encodeURIComponent(selPane.dataset.nodeId)}/expand`,
         {question:q, author:me(), space:space()}), $('#sel-ask'));
     $('#sel-pop').style.display='none';
-    await refreshStat(); renderNode(r.source);    // '연결'에 새 개념이 뜸
+    await refreshStat();
+    fillPane(r.source, selPane);             // 원본 패널의 '연결'에 새 개념 반영
+    await pushPane(r.target.id, selPane);    // 새로 만든 개념을 오른쪽 패널로 펼침
   }catch(e){ alert('실패: ' + e.message); }
 };
 
@@ -541,7 +608,7 @@ $('#btn-reset').onclick = async ()=>{
   try {
     await withBusy('전체 삭제 중…',
       ()=> api('POST','/api/admin/reset?confirm=DELETE-ALL'), $('#btn-reset'));
-    $('#center').innerHTML = '<div class="prov">전체 삭제됨. 새 질문을 시작하세요.</div>';
+    panes().innerHTML = '<div class="empty">전체 삭제됨. 새 질문을 시작하세요.</div>'; trail = [];
     await refreshStat(); reloadAll();
   } catch(e){ alert('삭제 실패: ' + e.message); }
 };
