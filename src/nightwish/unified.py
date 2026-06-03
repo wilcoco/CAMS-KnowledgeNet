@@ -411,6 +411,8 @@ def _node_view(svc: UnifiedService, node_id: str, space: str, *, full: bool = Fa
         "staked": round(sum(svc.econ.staked_on(n.id).values()), 4),
         "coauthors": _coauthors(svc, n.id),
     }
+    # 채택 = 사람이 평가(스테이크)한 답. 평가 전 AI 초안은 검색엔 보이되 '초안'으로 표시.
+    view["adopted"] = view["staked"] > 0
     if full:
         view["thread"] = _thread(svc, n.id, space)
         view["backlinks"] = [

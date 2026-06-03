@@ -338,6 +338,18 @@ def test_followup_ai_is_anchored_to_parent_chain(client):
         unified.set_ai(unified.offline_answer, model="offline-stub")
 
 
+def test_unevaluated_answer_is_draft_until_endorsed(client):
+    """평가 전 AI 초안은 검색엔 보이되 'adopted=False'(초안); 평가하면 채택."""
+    nid = client.post("/api/ask", json={"question": "초안질문", "author": "a"}).json()["node"]["id"]
+    assert client.get(f"/api/nodes/{nid}").json()["adopted"] is False
+    # 검색에는 그대로 보임 (숨기지 않음)
+    assert any(h["id"] == nid for h in client.get("/api/search", params={"q": "초안질문"}).json())
+    # 평가(스테이크)하면 채택됨
+    client.post("/api/mint", json={"account": "b", "amount": 50})
+    client.post("/api/endorse", json={"account": "b", "node_id": nid, "amount": 10})
+    assert client.get(f"/api/nodes/{nid}").json()["adopted"] is True
+
+
 def test_expand_creates_linked_concept_with_ai_answer(client):
     """드래그한 내용을 AI에게 물어 연결된 개념 노드로 만든다."""
     src = client.post("/api/ask", json={"question": "범퍼 생산 공정", "author": "u"}).json()["node"]["id"]

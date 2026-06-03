@@ -44,6 +44,8 @@
   .badge.query { color:var(--good); border-color:var(--good); }
   .badge.co.author { color:var(--acc); border-color:var(--acc); }
   .badge.co.evaluator { color:var(--link); border-color:var(--link); }
+  .badge.adopted { color:var(--good); border-color:var(--good); }
+  .badge.draft { color:var(--mut); border-color:var(--mut); }
   .answer { white-space:pre-wrap; background:var(--panel); border:1px solid var(--line);
             border-radius:8px; padding:12px; margin:8px 0; }
   /* AI busy indicator */
@@ -210,9 +212,15 @@ async function refreshStat(){
               ai.hint].filter(Boolean).join('\n');
 }
 
+function adoptBadge(n){
+  if (n.is_query || n.is_stub) return '';
+  return n.adopted ? '<span class="badge adopted">채택</span>'
+                   : '<span class="badge draft" title="아직 평가 안 됨 — 평가하면 채택됩니다">초안</span>';
+}
 function nodeItem(n){
-  const b = n.is_query ? '<span class="badge query">질의</span>'
-          : n.frozen ? '<span class="badge frozen">AI·동결</span>' : '';
+  const b = (n.is_query ? '<span class="badge query">질의</span>'
+          : n.frozen ? '<span class="badge frozen">AI·동결</span>' : '')
+          + ' ' + adoptBadge(n);
   const d = document.createElement('div');
   d.className = 'item';
   d.innerHTML = `<div class="t">${esc(n.title)} ${b}</div>
@@ -331,6 +339,7 @@ function renderNode(n){
       <h3>${esc(n.title)}</h3>
       ${n.is_query?'<span class="badge query">열린 질의</span>':''}
       ${n.frozen?'<span class="badge frozen">동결</span>':''}
+      ${adoptBadge(n)}
       <span class="badge">${esc(n.space)}</span>
     </div>
     <div class="prov">${prov} · 권위 ${n.authority} · 스테이크 ${n.staked}</div>
