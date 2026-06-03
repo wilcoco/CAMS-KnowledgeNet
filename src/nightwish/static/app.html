@@ -381,8 +381,10 @@ function renderNode(n){
       try{
         const r = await withBusy('평가 처리 중…',
           ()=> api('POST','/api/endorse',
-            {account:me(), node_id:b.dataset.eid, amount:Number(row.querySelector('.eval-amt').value)}), b);
-        out.textContent = `잔액 ${r.balance} · 배당 ${JSON.stringify(r.payouts)}`;
+            {account:me(), node_id:b.dataset.eid, amount:Number(row.querySelector('.eval-amt').value), space:space()}), b);
+        out.textContent = r.balance===undefined
+          ? `사적 평가(${r.space}) · 그룹 권위 ${r.group_authority}`
+          : `잔액 ${r.balance} · 배당 ${JSON.stringify(r.payouts)}`;
         loadLedger(); loadScores(); openNode(current.id);
       }catch(e){ out.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
     });
@@ -410,8 +412,10 @@ function renderNode(n){
     $('#btn-endorse').onclick = async ()=>{
       try{
         const r = await api('POST','/api/endorse',
-          {account:me(), node_id:n.id, amount:Number($('#end-amt').value)});
-        $('#end-out').textContent = `잔액 ${r.balance} · 배당 ${JSON.stringify(r.payouts)}`;
+          {account:me(), node_id:n.id, amount:Number($('#end-amt').value), space:space()});
+        $('#end-out').textContent = r.balance===undefined
+          ? `사적 평가(${r.space}) · 그룹 권위 ${r.group_authority}`
+          : `잔액 ${r.balance} · 배당 ${JSON.stringify(r.payouts)}`;
         loadLedger(); loadScores(); openNode(n.id);
       }catch(e){ $('#end-out').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
     };

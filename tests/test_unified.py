@@ -224,6 +224,46 @@ def test_create_node_promotes_a_stub_instead_of_500(client):
     assert r.json()["answer"].startswith("정의는") and r.json()["space"] == "public"
 
 
+# -- multi-currency endorse: common coin (public) + free-issue group coin ----
+def test_group_endorse_is_group_only_and_non_convertible(client):
+    a = client.post("/api/ask", json={"question": "개념 A", "author": "u"}).json()["node"]["id"]
+    b = client.post("/api/ask", json={"question": "개념 B", "author": "u"}).json()["node"]["id"]
+    # team-a privately endorses B three times (free-issue group coin)
+    for i in range(3):
+        r = client.post("/api/endorse", json={"account": f"g{i}", "node_id": b,
+                                              "amount": 5, "space": "team-a"})
+        assert r.status_code == 200 and "balance" not in r.json()   # no common-coin debit
+    # a public endorse on A spends the common coin
+    client.post("/api/mint", json={"account": "pub", "amount": 50})
+    client.post("/api/endorse", json={"account": "pub", "node_id": a, "amount": 2})
+
+    def auth(nid, space):
+        return client.get(f"/api/nodes/{nid}", params={"space": space}).json()["authority"]
+
+    # B's group endorse is visible only inside team-a — never public, never team-b
+    assert auth(b, "team-a") == 15.0
+    assert auth(b, "public") == 0.0
+    assert auth(b, "team-b") == 0.0
+    # A's public endorse is the shared prior everyone sees
+    assert auth(a, "public") == auth(a, "team-a") == 2.0
+
+
+def test_group_endorse_reranks_only_inside_the_group(client):
+    a = client.post("/api/ask", json={"question": "개념 A", "author": "u"}).json()["node"]["id"]
+    b = client.post("/api/ask", json={"question": "개념 B", "author": "u"}).json()["node"]["id"]
+    client.post("/api/mint", json={"account": "pub", "amount": 50})
+    client.post("/api/endorse", json={"account": "pub", "node_id": a, "amount": 2})  # public: A>B
+    client.post("/api/endorse", json={"account": "g0", "node_id": b,
+                                      "amount": 9, "space": "team-a"})               # team-a: B>A
+
+    def order(space):
+        return [n["id"] for n in client.get("/api/scores", params={"space": space}).json()["top_nodes"]]
+
+    assert order("public") == [a]            # commons unmoved by the private overlay
+    assert order("team-a") == [b, a]         # group re-ranks locally on the prior
+    assert order("team-b") == [a]            # another group is unaffected
+
+
 # -- wikilinks accrue authority; economy pays dividends up the chain ---------
 def test_wikilink_authority_and_endorse_dividend(client):
     # alice links [[핵심개념]] first; bob links it later → alice's foresight (hub)

@@ -43,6 +43,9 @@ def _busy_snapshot(tmp_path) -> dict:
         c.post("/api/mint", json={"account": "Lee", "amount": 100})
         c.post("/api/endorse", json={"account": "Kim", "node_id": a, "amount": 30})
         c.post("/api/endorse", json={"account": "Lee", "node_id": a, "amount": 20})
+        # group-private endorse (free-issue group coin) must also round-trip
+        c.post("/api/endorse", json={"account": "Acme", "node_id": a,
+                                     "amount": 7, "space": "acme"})
         snap = svc._snapshot()
     unified.reset_service(None)
     return snap

@@ -25,6 +25,7 @@ need instead of loading the entire graph.
 from __future__ import annotations
 
 import contextlib
+import json
 from typing import Optional
 
 from nightwish.db import _LOCK_KEY, _connect, database_url  # reuse connection + lock
@@ -80,6 +81,10 @@ def snapshot_to_rows(snap: dict) -> dict[str, list[dict]]:
         {"k": "schema", "v": str(snap.get("schema", "unified-1"))},
         {"k": "tree_schema", "v": str(tree.get("schema", 1))},
         {"k": "scoring_mode", "v": str(scoring.get("mode", "harmonic"))},
+        # Per-group private scorers are kept as a single JSON blob (small,
+        # write-rarely) rather than parallel normalized tables — see
+        # docs/design/05-private-public-endorse.md.
+        {"k": "group_scoring", "v": json.dumps(tree.get("group_scoring", {}))},
         {"k": "clock", "v": str(tree.get("clock", 0))},
         {"k": "large_stake_threshold", "v": str(tree.get("large_stake_threshold", 25.0))},
         {"k": "burned", "v": str(econ.get("burned", 0.0))},
@@ -148,6 +153,7 @@ def rows_to_snapshot(tables: dict[str, list[dict]]) -> dict:
             "hub": {r["account"]: float(r["value"]) for r in tables.get("user_hub", [])},
             "linkers": {k: [e for _o, e in sorted(v)] for k, v in linkers.items()},
         },
+        "group_scoring": json.loads(meta.get("group_scoring") or "{}"),
         "nodes": node_jsons,
     }
     econ = {

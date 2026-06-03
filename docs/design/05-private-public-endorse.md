@@ -1,6 +1,6 @@
 # 05 — 사적/공적 지식의 구별과 연동 (다중통화 endorse)
 
-> **상태:** 합의 완료(사양 고정), 구현 착수.
+> **상태:** 합의 완료 → **구현 완료**(정본 unified/tree). 레거시 wiki/mvp는 범위 밖.
 > **한 줄:** *개념(slug)은 항상 공용 commons. 사적인 것은 그 위에 얹는 **층(layer)**.
 > 가치(endorse)는 공통 코인 1개 + 그룹별 사적 코인의 **다중통화**, 전부 **단방향**.*
 
@@ -78,6 +78,14 @@
 4. **검색 랭킹** — `authority(node, space)` = `공통_authority(prior) + 그룹_authority(space)`. 단방향: 그룹 점수는 공통을 읽되 공통 점수엔 안 더해짐.
 
 > 가시성(`_visible`)·child의 `parent~seq` 키는 이미 충돌이 없어, 사적 오버레이는 데이터 모델상 곧장 동작한다.
+
+### 구현된 형태 (참조)
+
+- `tree.group_scoring: dict[space, ScoreEngine]` — 그룹별 사적 스코어러(자유발행·비태환: `WikiEconomy` 공통 코인과 무관). 그룹 endorse의 "코인"은 그 엔진에 넣은 weight 그 자체.
+- `tree.authority_in(node, space)` = 공통 `scoring.authority_of` (prior) + 그룹 오버레이(그룹 뷰어일 때만). **단방향**: 공통 권위엔 그룹 코인이 절대 안 섞인다.
+- `POST /api/endorse {space}` — `public`이면 공통 코인(배당), 그룹이면 `group_endorse`(그룹 전용). `_node_view`·`/api/scores`·`/api/graph` 랭킹이 `authority_in(space)`로 전환.
+- 영속: `OntologyTree.to_json/from_json`에 `group_scoring`, `pgstore`는 `meta`에 JSON blob로 라운드트립.
+- UI: `app.html`의 endorse가 뷰어 `space()`를 전달, 공통/그룹 응답을 구분 표시.
 
 ## 6. 참조 사례 (벤치마크)
 

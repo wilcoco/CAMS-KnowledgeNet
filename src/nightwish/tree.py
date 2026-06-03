@@ -153,8 +153,14 @@ class Node:
 class OntologyTree:
     """The whole forest of question threads plus the scoring engine."""
 
+    #: the **public commons** scorer — the one global authority everyone shares.
     scoring: ScoreEngine = field(default_factory=ScoreEngine)
     nodes: dict[str, Node] = field(default_factory=dict)
+    #: per-group **private** scorers (space → engine). A group's endorsements feed
+    #: only its own engine (free-issue, non-convertible "group coin"), so its
+    #: authority overlay is visible *only inside the group* and can never move the
+    #: public commons. See ``docs/design/05-private-public-endorse.md``.
+    group_scoring: dict[str, ScoreEngine] = field(default_factory=dict)
     #: stake at/above this requires an accompanying contribution (value_add)
     large_stake_threshold: float = 25.0
     _clock: int = 0
@@ -561,6 +567,49 @@ class OntologyTree:
         """
         return space is None or node.space == "public" or node.space == space
 
+    # -- multi-currency endorse (public commons coin + per-group coin) ---------
+    @staticmethod
+    def _is_group(space: str | None) -> bool:
+        return space is not None and space != "public"
+
+    def _group_engine(self, space: str) -> ScoreEngine:
+        """Get/create the private scorer for ``space`` (shares the hub mode)."""
+        eng = self.group_scoring.get(space)
+        if eng is None:
+            eng = self.group_scoring[space] = ScoreEngine(mode=self.scoring.mode)
+        return eng
+
+    def authority_in(self, node_id: str, space: str | None = None) -> float:
+        """Authority a viewer in ``space`` sees: public commons **prior** plus,
+        for a group viewer, that group's own private endorse **overlay**.
+
+        One-way: the public commons authority never includes any group's coin, so
+        a public viewer (``space`` public/None) sees only the shared value, while a
+        group re-ranks the same commons locally without ever leaking outward.
+        """
+        base = self.scoring.authority_of(node_id)
+        if self._is_group(space) and space in self.group_scoring:
+            base += self.group_scoring[space].authority_of(node_id)
+        return base
+
+    def group_endorse(
+        self, space: str, evaluator: str, node_id: str, *, weight: float = 1.0
+    ) -> None:
+        """Record a **group-private** endorsement (free-issue group coin).
+
+        Feeds only the group's own engine — never the public commons and never
+        another group — so it is non-convertible and visible only inside ``space``.
+        """
+        if not self._is_group(space):
+            raise OntologyError("group_endorse requires a group space")
+        self._group_engine(space).link(evaluator, node_id, weight=weight)
+
+    def group_linker_position(
+        self, space: str, evaluator: str, node_id: str
+    ) -> int | None:
+        eng = self.group_scoring.get(space)
+        return eng.linker_position(evaluator, node_id) if eng else None
+
     def visible_nodes(self, space: str | None = None) -> list[Node]:
         return [n for n in self.nodes.values() if self._visible(n, space)]
 
@@ -632,6 +681,14 @@ class OntologyTree:
                 "hub": dict(self.scoring.hub),
                 "linkers": {k: list(v) for k, v in self.scoring._linkers.items()},
             },
+            "group_scoring": {
+                space: {
+                    "authority": dict(eng.authority),
+                    "hub": dict(eng.hub),
+                    "linkers": {k: list(v) for k, v in eng._linkers.items()},
+                }
+                for space, eng in self.group_scoring.items()
+            },
             "nodes": [self._node_to_json(n) for n in self.nodes.values()],
         }
 
@@ -675,6 +732,14 @@ class OntologyTree:
             list, {k: list(v) for k, v in sc.get("linkers", {}).items()}
         )
         tree = cls(scoring=scoring)
+        for space, gs in data.get("group_scoring", {}).items():
+            eng = ScoreEngine(mode=scoring.mode)
+            eng.authority = defaultdict(float, gs.get("authority", {}))
+            eng.hub = defaultdict(float, gs.get("hub", {}))
+            eng._linkers = defaultdict(
+                list, {k: list(v) for k, v in gs.get("linkers", {}).items()}
+            )
+            tree.group_scoring[space] = eng
         tree._clock = data.get("clock", 0)
         tree.large_stake_threshold = data.get("large_stake_threshold", 25.0)
         for d in data.get("nodes", []):

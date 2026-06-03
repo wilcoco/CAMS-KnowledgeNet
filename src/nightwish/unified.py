@@ -353,6 +353,9 @@ class EndorseBody(BaseModel):
     account: str = Field(min_length=1)
     node_id: str = Field(min_length=1)
     amount: float = Field(gt=0)
+    #: "public" spends the common coin (commons authority); a group space spends
+    #: free-issue, non-convertible group coin (group-only authority overlay).
+    space: str = "public"
 
 
 class ExpandBody(BaseModel):
@@ -408,7 +411,7 @@ def _node_view(svc: UnifiedService, node_id: str, space: str, *, full: bool = Fa
         "is_stub": n.is_stub, "is_query": n.is_query, "frozen": n.frozen,
         "model": n.model, "answered_at": n.answered_at, "space": n.space,
         "links": list(n.links), "updated_at": n.updated_at,
-        "authority": round(t.scoring.authority_of(n.id), 4),
+        "authority": round(t.authority_in(n.id, space), 4),
         "staked": round(sum(svc.econ.staked_on(n.id).values()), 4),
         "coauthors": _coauthors(svc, n.id),
     }
@@ -437,7 +440,7 @@ def _thread(svc: UnifiedService, node_id: str, space: str) -> list[dict]:
             "id": child.id, "kind": child.action.value, "author": child.author,
             "title": child.question, "body": child.answer,
             "frozen": child.frozen, "model": child.model, "space": child.space,
-            "authority": round(t.scoring.authority_of(child.id), 4),
+            "authority": round(t.authority_in(child.id, space), 4),
             "staked": round(sum(svc.econ.staked_on(child.id).values()), 4),
             "replies": _thread(svc, child.id, space),
         })
@@ -804,12 +807,18 @@ def create_app() -> FastAPI:
         svc = get_service()
         with svc.reading():
             t = svc.tree
+            # A group viewer ranks on the public commons prior + its own private
+            # endorse overlay; a public viewer sees only the commons.
             ranked = sorted(
-                ((n, t.scoring.authority_of(n.id))
+                ((n, t.authority_in(n.id, space))
                  for n in t.visible_nodes(space) if not n.is_stub),
                 key=lambda na: -na[1],
             )
-            hubs = sorted(((u, h) for u, h in t.scoring.hub.items() if h > 0),
+            hub = dict(t.scoring.hub)
+            if t._is_group(space) and space in t.group_scoring:
+                for u, h in t.group_scoring[space].hub.items():
+                    hub[u] = hub.get(u, 0.0) + h
+            hubs = sorted(((u, h) for u, h in hub.items() if h > 0),
                           key=lambda uh: -uh[1])
             # 채택 평가자 가시화: hub는 후속 평가자가 와야 붙지만, 평가(스테이크)
             # 행위 자체는 즉시 인정받아야 한다 — 콜드스타트 완화.
@@ -842,7 +851,7 @@ def create_app() -> FastAPI:
             vis = {n.id for n in t.visible_nodes(space)}
             nodes = [
                 {"id": n.id, "title": n.question,
-                 "authority": round(t.scoring.authority_of(n.id), 3),
+                 "authority": round(t.authority_in(n.id, space), 3),
                  "is_stub": n.is_stub}
                 for n in t.visible_nodes(space) if n.parent_id is None
             ]
@@ -867,6 +876,29 @@ def create_app() -> FastAPI:
             n = svc.tree.nodes.get(body.node_id)
             if n is None or n.is_stub:
                 raise HTTPException(404, f"node {body.node_id!r} not found or empty")
+            # A group endorses only what it can see (public commons ∪ its own layer).
+            if not svc.tree._visible(n, body.space):
+                raise HTTPException(404, f"node {body.node_id!r} not found or empty")
+
+            # -- group-private endorse: free-issue, non-convertible group coin.
+            # It feeds ONLY the group's own engine, so it never touches the common
+            # coin economy and never moves the public commons authority.
+            if svc.tree._is_group(body.space):
+                first_time = svc.tree.group_linker_position(
+                    body.space, body.account, body.node_id) is None
+                if first_time and body.account != n.author:
+                    svc.tree.group_endorse(
+                        body.space, body.account, body.node_id, weight=body.amount)
+                return {
+                    "account": body.account,
+                    "space": body.space,
+                    "group_authority": round(
+                        svc.tree.group_scoring[body.space].authority_of(body.node_id), 4
+                    ) if body.space in svc.tree.group_scoring else 0.0,
+                    "coauthors": _coauthors(svc, body.node_id),
+                }
+
+            # -- public endorse: spend the common coin; pay dividends up the chain.
             try:
                 payouts = svc.econ.endorse(
                     body.account, body.node_id, body.amount,
