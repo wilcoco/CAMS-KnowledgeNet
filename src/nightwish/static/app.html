@@ -71,11 +71,17 @@
   #busy.on { display:flex; }
   .inline-busy { color:var(--acc); font-size:12px; }
   button[disabled] { opacity:.55; cursor:progress; }
-  /* 본문 드래그 → AI에게 묻고 연결 팝업 */
-  #sel-pop { position:absolute; display:none; z-index:60; width:280px; padding:8px;
+  /* 본문 드래그 → AI에게 묻고 연결 팝업 (fixed: 패널 내부 스크롤과 무관하게 정확) */
+  #sel-pop { position:fixed; display:none; z-index:60; width:280px; padding:8px;
              background:var(--panel); border:1px solid var(--acc); border-radius:8px;
              box-shadow:0 6px 20px rgba(0,0,0,.45); }
   #sel-pop input { width:100%; margin:4px 0; }
+  /* 작업 결과(평가·채우기 등) 토스트 — 패널 재렌더로 사라지지 않게 화면 상단 고정 */
+  #toast { position:fixed; top:10px; left:50%; transform:translateX(-50%); z-index:70;
+           display:none; max-width:80vw; padding:8px 14px; border-radius:8px;
+           background:#1d2530; border:1px solid var(--acc); color:var(--fg); font-size:13px;
+           box-shadow:0 6px 20px rgba(0,0,0,.45); }
+  #toast.on { display:block; }
   .wl-row, .ol { color:var(--link); cursor:pointer; }
   .node-head { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
   .node-head h3 { margin:0; font-size:18px; }
@@ -100,6 +106,7 @@
 </head>
 <body>
 <div id="busy"><span class="spinner"></span> <span id="busy-msg">AI가 답변을 생성하는 중…</span></div>
+<div id="toast"></div>
 <div id="sel-pop">
   <div class="prov" id="sel-src"></div>
   <input id="sel-q" placeholder="이 내용을 AI에게 물어 연결…" />
@@ -118,6 +125,7 @@
   </select>
   <input id="space-new" placeholder="그룹 id 추가" style="width:110px" />
   <button class="sec" id="add-space">+</button>
+  <span class="m" id="layer-hint" style="color:var(--acc)"></span>
   <label class="m">나</label>
   <input id="me" value="anon" style="width:90px" />
   <button class="sec" id="btn-reset" title="모든 노드·평가 삭제 (되돌릴 수 없음)">전체 삭제</button>
@@ -183,7 +191,9 @@ async function withBusy(msg, fn, btn){
   $('#busy-msg').textContent = msg;
   $('#busy').classList.add('on');
   let label;
-  if (btn){ label = btn.textContent; btn.disabled = true; btn.textContent = '⏳ ' + label; }
+  // 실제 스피너를 누른 버튼 위에 — AI 등 느린 동작 중 버튼이 돈다
+  if (btn){ label = btn.innerHTML; btn.disabled = true;
+            btn.innerHTML = `<span class="spinner"></span> ${label}`; }
   const t0 = Date.now();
   const tick = setInterval(()=>{
     $('#busy-msg').textContent = `${msg} (${((Date.now()-t0)/1000).toFixed(0)}초)`;
@@ -192,11 +202,16 @@ async function withBusy(msg, fn, btn){
   finally {
     clearInterval(tick);
     if (--busyDepth <= 0){ busyDepth = 0; $('#busy').classList.remove('on'); }
-    if (btn){ btn.disabled = false; btn.textContent = label; }
+    if (btn){ btn.disabled = false; btn.innerHTML = label; }
   }
 }
+// 상단 토스트 — 패널 재렌더로 사라지지 않는 작업 결과 안내
+let toastT = null;
+function toast(msg, ms=3500){
+  const el = $('#toast'); el.textContent = msg; el.classList.add('on');
+  clearTimeout(toastT); toastT = setTimeout(()=> el.classList.remove('on'), ms);
+}
 const esc = s => (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-let current = null;
 
 // render [[wikilinks]] as clickable
 function renderText(t){
@@ -320,13 +335,19 @@ function addPaneEl(n){
 }
 function focusPane(pane){
   panes().querySelectorAll('.pane.active').forEach(p=>p.classList.remove('active'));
-  if (pane){ pane.classList.add('active'); current = pane._node; }
+  if (pane) pane.classList.add('active');
 }
-async function refreshPane(pane){ fillPane(await fetchNode(pane.dataset.nodeId), pane); }
+async function refreshPane(pane){
+  try { fillPane(await fetchNode(pane.dataset.nodeId), pane); }
+  catch(e){ closePane(pane); }     // 새 레이어에서 안 보이면 패널 정리
+}
+function refreshAllPanes(){ [...panes().children].forEach(p => p.dataset.nodeId && refreshPane(p)); }
 function closePane(pane){               // close this pane and everything to its right
   const i = paneIndexOf(pane);
   while (panes().children.length > i){ panes().lastChild.remove(); trail.pop(); }
-  focusPane(panes().lastChild);
+  if (!panes().children.length)         // 전부 닫히면 빈 안내
+    panes().innerHTML = '<div class="empty">왼쪽에서 답을 고르거나, AI에게 질문해 새 노드를 만드세요.</div>';
+  else focusPane(panes().lastChild);
 }
 
 function threadHTML(list){
@@ -348,8 +369,10 @@ function threadHTML(list){
           title="이 답에 동의·스테이크하고 배당받기 (평가=저작)">평가</button>
         <span class="prov eval-out">· 스테이크 ${c.staked}</span>
       </div>` : '';
+    const grpBadge = c.space && c.space!=='public'
+      ? ` <span class="badge" title="이 그룹에서만 보이는 사적 기여">${esc(c.space)}</span>` : '';
     return `<div class="c ${cls}">
-      <div class="who"><span class="kind-tag">${tag}</span> · ${esc(c.author)}${frozen}
+      <div class="who"><span class="kind-tag">${tag}</span> · ${esc(c.author)}${frozen}${grpBadge}
         · 권위 ${c.authority}</div>
       ${title}
       <div class="body">${renderText(c.body)}</div>
@@ -389,9 +412,12 @@ function fillPane(n, c){
     <div class="row"><button class="q-ai">AI가 답하기</button>
       <button class="sec q-human">사람이 답하기</button></div>
     <div class="q-answer"></div>` : '';
+  const grp = space() !== 'public';        // 그룹 레이어면 평가 시맨틱이 다르다
   const endorse = (!n.is_query && !n.is_stub) ? `
     <div class="row"><input class="end-amt" type="number" value="10" style="width:80px"/>
-      <button class="sec btn-endorse" title="이 답에 동의·스테이크하고 배당받기 (평가=저작)">평가 (스테이크+배당)</button>
+      <button class="sec btn-endorse" title="${grp
+        ? `'${esc(space())}' 그룹 내부에서만 보이는 사적 평가 — 자유발행 그룹 코인, 공통 권위·잔액에 무영향`
+        : '공통 코인을 스테이크하고 배당받기 (평가=저작)'}">${grp ? `사적 평가 (${esc(space())} 코인)` : '평가 (스테이크+배당)'}</button>
       <span class="prov end-out"></span></div>` : '';
   const stubFill = n.is_stub ? `
     <div class="row"><button class="btn-fill">🪄 AI로 이 개념 채우기</button>
@@ -403,7 +429,7 @@ function fillPane(n, c){
       ${n.is_query?'<span class="badge query">열린 질의</span>':''}
       ${n.frozen?'<span class="badge frozen">동결</span>':''}
       ${adoptBadge(n)}
-      <span class="badge">${esc(n.space)}</span>
+      ${n.space && n.space!=='public' ? `<span class="badge">${esc(n.space)}</span>` : ''}
     </div>
     <div class="prov">${prov} · 권위 ${n.authority} · 스테이크 ${n.staked}</div>
     ${coauthorsHTML(n.coauthors)}
@@ -446,9 +472,9 @@ function fillPane(n, c){
         const r = await withBusy('평가 처리 중…',
           ()=> api('POST','/api/endorse',
             {account:me(), node_id:b.dataset.eid, amount:Number(row.querySelector('.eval-amt').value), space:space()}), b);
-        out.textContent = r.balance===undefined
-          ? `사적 평가(${r.space}) · 그룹 권위 ${r.group_authority}`
-          : `잔액 ${r.balance} · 배당 ${JSON.stringify(r.payouts)}`;
+        toast(r.balance===undefined
+          ? `사적 평가 완료 (${r.space}) · 그룹 권위 ${r.group_authority}`
+          : `평가 완료 · 잔액 ${r.balance} · 배당 ${JSON.stringify(r.payouts)}`);
         loadLedger(); loadScores(); refreshPane(c);
       }catch(e){ out.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
     });
@@ -478,19 +504,21 @@ function fillPane(n, c){
         await withBusy('AI가 개념을 정리하는 중…',
           ()=> api('POST',`/api/nodes/${encodeURIComponent(n.id)}/fill`,
             {author:me(), space:space()}), ev.currentTarget);
+        toast('AI가 개념을 채웠습니다');
         await refreshStat(); loadScores(); refreshPane(c);
       }catch(e){ c.querySelector('.fill-out').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
     };
   }
   if (!n.is_query && !n.is_stub){
-    c.querySelector('.btn-endorse').onclick = async ()=>{
+    c.querySelector('.btn-endorse').onclick = async (ev)=>{
       const out = c.querySelector('.end-out');
       try{
-        const r = await api('POST','/api/endorse',
-          {account:me(), node_id:n.id, amount:Number(c.querySelector('.end-amt').value), space:space()});
-        out.textContent = r.balance===undefined
-          ? `사적 평가(${r.space}) · 그룹 권위 ${r.group_authority}`
-          : `잔액 ${r.balance} · 배당 ${JSON.stringify(r.payouts)}`;
+        const r = await withBusy('평가 처리 중…',
+          ()=> api('POST','/api/endorse',
+            {account:me(), node_id:n.id, amount:Number(c.querySelector('.end-amt').value), space:space()}), ev.currentTarget);
+        toast(r.balance===undefined
+          ? `사적 평가 완료 (${r.space}) · 그룹 권위 ${r.group_authority}`
+          : `평가 완료 · 잔액 ${r.balance} · 배당 ${JSON.stringify(r.payouts)}`);
         loadLedger(); loadScores(); refreshPane(c);
       }catch(e){ out.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
     };
@@ -618,13 +646,22 @@ $('#add-space').onclick = ()=>{
     const o = document.createElement('option'); o.value=o.textContent=v;
     $('#space').appendChild(o);
   }
-  $('#space').value = v; $('#space-new').value=''; reloadAll();
+  $('#space').value = v; $('#space-new').value=''; onSpaceChange();
 };
-$('#space').onchange = reloadAll;
+$('#space').onchange = onSpaceChange;
 
+function onSpaceChange(){           // 레이어 바뀌면 좌·우뿐 아니라 *열린 패널*도 갱신
+  reloadAll();
+  refreshAllPanes();
+  updateLayerHint();
+}
+function updateLayerHint(){
+  const sp = space();
+  $('#layer-hint').textContent = sp==='public' ? '' : `· ${sp} 오버레이로 보는 중`;
+}
 function reloadAll(){ doSearch(); loadQueries(); loadScores(); loadLedger(); }
 (async function init(){
-  await refreshStat(); reloadAll();
+  await refreshStat(); reloadAll(); updateLayerHint();
 })();
 </script>
 </body>
