@@ -202,10 +202,15 @@ class OntologyTree:
                 continue
             link_slugs.append(ts)
             if ts not in self.nodes:
+                # A wikilink target is a *concept* (an empty slug awaiting an AI
+                # summary), so its stub is born into the public commons — never
+                # the mentioning node's group space. Otherwise a group that
+                # merely *referenced* a universal concept would squat its global
+                # address. (docs/design/05-private-public-endorse.md)
                 self.nodes[ts] = Node(
                     id=ts, question=title, answer="", author=STUB_AUTHOR,
                     action=Action.STUB, created_at=self._tick(),
-                    slug=ts, space=node.space, updated_at=self._clock,
+                    slug=ts, space="public", updated_at=self._clock,
                     last_editor=STUB_AUTHOR,
                 )
             # Only *newly added* links score, so re-editing a body does not
@@ -217,9 +222,16 @@ class OntologyTree:
     # -- creation --------------------------------------------------------------
     def add_root(
         self, node_id: str, question: str, answer: str, author: str,
-        stake: float = 0.0, *, space: str = "public",
+        stake: float = 0.0,
     ) -> Node:
-        """Open a brand-new question thread with its first answer."""
+        """Open a brand-new question thread with its first answer.
+
+        A ROOT is a **concept**: it owns the global ``slug`` address and is the
+        shared commons coordinate everyone resolves ``[[Title]]`` to. Concept
+        identity is therefore always **public** — privacy lives in the *overlays*
+        (group contributions/endorsements), never in the concept itself. See
+        ``docs/design/05-private-public-endorse.md``.
+        """
         if node_id in self.nodes:
             raise OntologyError(f"node {node_id!r} already exists")
         node = Node(
@@ -231,7 +243,7 @@ class OntologyTree:
             stake=stake,
             value_add=True,
             created_at=self._tick(),
-            space=space,
+            space="public",
         )
         self.nodes[node_id] = node
         self._finalize(node)

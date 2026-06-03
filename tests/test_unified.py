@@ -200,6 +200,30 @@ def test_group_contribution_invisible_to_public(client):
     assert client.get("/api/search", params={"q": "sshh", "space": "public"}).json() == []
 
 
+# -- concept identity is always public commons (overlays carry privacy) ------
+def test_concept_roots_and_stubs_are_always_public(client):
+    # a group member writes a page AND references a universal concept; both the
+    # ROOT and the auto-extracted [[ ]] stub must be born public, never squat
+    # the global slug as a private node. (docs/design/05-private-public-endorse)
+    r = client.post("/api/nodes", json={"title": "팀A문서", "space": "team-a",
+                                        "body": "우리는 [[벡터 시계]]를 쓴다", "author": "a"})
+    assert r.status_code == 200 and r.json()["space"] == "public"   # ROOT public
+    # the referenced concept is now discoverable in the public commons
+    pub = {n["id"] for n in client.get("/api/search", params={"space": "public"}).json()}
+    assert "팀a문서" in pub
+
+
+def test_create_node_promotes_a_stub_instead_of_500(client):
+    # asking links [[핵심개념]] → a public stub is created; a human then writing
+    # that concept page must *promote* the stub, not crash with OntologyError.
+    client.post("/api/nodes", json={"title": "문서X", "body": "[[핵심개념]] 참고",
+                                    "author": "alice"})
+    r = client.post("/api/nodes", json={"title": "핵심개념", "body": "정의는…",
+                                        "author": "bob"})
+    assert r.status_code == 200
+    assert r.json()["answer"].startswith("정의는") and r.json()["space"] == "public"
+
+
 # -- wikilinks accrue authority; economy pays dividends up the chain ---------
 def test_wikilink_authority_and_endorse_dividend(client):
     # alice links [[핵심개념]] first; bob links it later → alice's foresight (hub)

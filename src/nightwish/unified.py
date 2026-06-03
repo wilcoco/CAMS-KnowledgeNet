@@ -616,7 +616,9 @@ def create_app() -> FastAPI:
         text = _ask_ai(body.question)
         with svc.writing():
             nid = svc._new_id(body.question)
-            svc.tree.add_root(nid, body.question, text, body.author, space=body.space)
+            # The concept (ROOT) is always public commons; the asker's group
+            # (body.space) only frames *discovery*, never the concept's home.
+            svc.tree.add_root(nid, body.question, text, body.author)
             svc.tree.mark_answered(nid, _ai_model)
             return {"stage": "ai",
                     "node": _node_view(svc, nid, body.space, full=True),
@@ -624,18 +626,24 @@ def create_app() -> FastAPI:
 
     @app.post("/api/nodes")
     def create_node(body: PageBody):
-        """Create (or edit) a human-authored knowledge node."""
+        """Create (or edit) a human-authored knowledge node.
+
+        A ROOT concept is always public commons (its slug is a shared address),
+        so ``space`` only frames the viewer's discovery, not the node's home.
+        """
         svc = get_service()
         with svc.writing():
-            existing = svc.tree.nodes.get(slugify(body.title))
+            nid = slugify(body.title)
+            existing = svc.tree.nodes.get(nid)
             if existing is not None and not existing.is_stub:
                 if existing.frozen:
                     raise HTTPException(
                         409, "동결된 AI 답변은 직접 수정할 수 없습니다 — 기여로 추가하세요")
                 svc.tree.edit(existing.id, body.body, body.author)
                 return _node_view(svc, existing.id, body.space, full=True)
-            nid = slugify(body.title)
-            svc.tree.add_root(nid, body.title, body.body, body.author, space=body.space)
+            if existing is not None:           # promote an empty stub → real page
+                del svc.tree.nodes[nid]
+            svc.tree.add_root(nid, body.title, body.body, body.author)
             return _node_view(svc, nid, body.space, full=True)
 
     @app.post("/api/nodes/{node_id}/contribute")
@@ -737,7 +745,7 @@ def create_app() -> FastAPI:
                     del svc.tree.nodes[target_slug]
                 try:
                     svc.tree.add_root(target_slug, body.question, ai_text or "",
-                                      body.author, space=body.space)
+                                      body.author)
                 except OntologyError as e:
                     raise HTTPException(400, str(e))
                 svc.tree.mark_answered(target_slug, _ai_model)
