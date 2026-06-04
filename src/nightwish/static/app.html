@@ -37,15 +37,27 @@
     .pane { flex-basis:88vw; } }
   /* LEFT: IDE-style knowledge tree explorer (노트 09) */
   #tree { font-size:13px; max-height:42vh; overflow:auto; margin-bottom:4px;
-          border:1px solid var(--line); border-radius:8px; padding:4px 2px; }
-  .trow { display:flex; align-items:center; gap:3px; padding:2px 4px; border-radius:5px;
+          border:1px solid var(--line); border-radius:8px; padding:5px 4px; }
+  .trow { display:flex; align-items:center; gap:4px; padding:2px 4px; border-radius:5px;
           cursor:pointer; white-space:nowrap; }
   .trow:hover { background:#1a1f29; }
   .trow.cur { background:#1e3a2b; box-shadow:inset 2px 0 0 var(--good); }
-  .ttwist { flex:0 0 13px; text-align:center; color:var(--mut); user-select:none; }
+  .ttwist { flex:0 0 13px; text-align:center; color:var(--mut); user-select:none; font-size:11px; }
   .tlabel { overflow:hidden; text-overflow:ellipsis; }
-  .tkind { color:var(--mut); font-size:10px; }
-  .tkids { margin-left:9px; border-left:1px solid var(--line); padding-left:3px; }
+  .tkind { font-size:9px; padding:0 4px; border-radius:8px; border:1px solid var(--line);
+           color:var(--mut); margin-right:4px; vertical-align:1px; }
+  .tkind.comment { color:var(--good); border-color:#2c4; }
+  .tkind.fork    { color:var(--fork); border-color:var(--fork); }
+  .tkind.followup{ color:var(--link); border-color:var(--link); }
+  .tkind.unfold  { color:var(--warn); border-color:var(--warn); }
+  /* root concepts = the spine: bold + diamond marker + a little air above */
+  .tnode.root > .trow { margin-top:3px; }
+  .tnode.root > .trow .tlabel { font-weight:700; }
+  .tnode.root > .trow .tlabel::before { content:"◆ "; color:var(--acc); font-weight:400; }
+  /* annotations (보강/정정) read as "on the answer", so muted; sub-questions stay bright */
+  .trow.annot .tlabel { color:var(--mut); }
+  /* each level steps in with its own guide rail */
+  .tkids { margin-left:7px; border-left:1px solid var(--line); padding-left:7px; }
   h2.sec { font-size:11px; color:var(--acc); text-transform:uppercase;
            letter-spacing:.5px; margin:16px 0 6px; }
   button { background:var(--acc); color:#0a0c10; border:0; border-radius:6px;
@@ -395,26 +407,30 @@ function indexTree(list, parentId){
     if (n.children && n.children.length) indexTree(n.children, n.id);
   });
 }
-function treeRowHTML(n){
+function treeRowHTML(n, depth){
   const kids = n.children && n.children.length;
   const open = !!treeOpen[n.id];
   const tw = kids ? (open ? '▾' : '▸') : '·';
-  const kindLabel = {comment:'보강', fork:'정정', unfold:'↳', query:'질의'}[n.kind] || '';
+  // 보강/정정 = 답에 붙는 주석(계위상 하위 아님), 후속 = 하위 질문(계위), 펼침 = 맥락
+  const kindMap = {comment:'보강', fork:'정정', followup:'후속', unfold:'↳', query:'질의'};
+  const kindCls = n.kind==='contribute' ? (n.title ? 'followup' : '') : n.kind;
+  const kindLabel = kindMap[kindCls] || '';
+  const annot = (n.kind==='comment' || n.kind==='fork') ? ' annot' : '';
   const label = (n.kind==='unfold' && n.anchor) ? `«${esc(n.anchor)}»` : esc(n.title);
   const cur = n.id===curNodeId ? ' cur' : '';
-  return `<div class="tnode">
-    <div class="trow${cur}" data-id="${esc(n.id)}" data-kids="${kids?1:0}">
+  return `<div class="tnode${depth===0?' root':''}">
+    <div class="trow${cur}${annot}" data-id="${esc(n.id)}" data-kids="${kids?1:0}">
       <span class="ttwist">${tw}</span>
-      <span class="tlabel">${kindLabel?`<span class="tkind">${kindLabel} </span>`:''}${label}</span>
+      <span class="tlabel">${kindLabel?`<span class="tkind ${kindCls}">${kindLabel}</span>`:''}${label}</span>
     </div>
     ${kids ? `<div class="tkids" style="display:${open?'block':'none'}">${
-      n.children.map(treeRowHTML).join('')}</div>` : ''}
+      n.children.map(c=>treeRowHTML(c, depth+1)).join('')}</div>` : ''}
   </div>`;
 }
 function renderTree(){
   const box = $('#tree');
   box.innerHTML = treeData.length
-    ? treeData.map(treeRowHTML).join('')
+    ? treeData.map(n=>treeRowHTML(n, 0)).join('')
     : '<div class="prov">아직 개념이 없습니다. 아래에서 AI에게 질문해 첫 노드를 만드세요.</div>';
   box.querySelectorAll('.trow').forEach(row => {
     const id = row.dataset.id;
