@@ -502,7 +502,8 @@ function threadHTML(list){
   return '<div class="thread">' + list.map(c => {
     const cls = c.kind==='fork' ? 'fork' : '';
     const tag = {comment:'보강', fork:'정정/다른 답',
-                 contribute: c.title ? '후속질문' : '기여', root:'답'}[c.kind] || c.kind;
+                 contribute: c.title ? '후속질문' : (c.frozen ? '답' : '기여'),
+                 root:'답'}[c.kind] || c.kind;
     const frozen = c.frozen ? ' <span class="badge frozen">AI</span>' : '';
     const title = c.title ? `<div class="who"><b>${esc(c.title)}</b></div>` : '';
     // 답(내용 있거나 AI 답)인 항목은 평가 가능 — 질문만 있는 후속질문 노드는 제외
@@ -529,11 +530,13 @@ function threadHTML(list){
   }).join('') + '</div>';
 }
 
-function actbar(id){
+function actbar(id, withFollow=true){
+  // 노드 레벨에선 withFollow=false — 상단 ask-row가 노드의 '최초 질문'을 담당하므로
+  // 후속질문 버튼은 빼서 중복 제거. 가지(스레드 항목)에선 유지(그 가지에 앵커된 후속).
   return `<div class="actbar">
     <button class="sec" data-act="comment" data-id="${id}">보강</button>
     <button class="sec" data-act="fork" data-id="${id}">정정/다른 답</button>
-    <button class="sec" data-act="followup" data-id="${id}">후속질문</button>
+    ${withFollow ? `<button class="sec" data-act="followup" data-id="${id}">후속질문</button>` : ''}
   </div>`;
 }
 
@@ -597,7 +600,7 @@ function fillPane(n, c){
     }</div>`:''}
     <div class="prov" style="margin-top:4px">💡 본문 어디든 드래그하면 그 주제가 오른쪽에 열려요 — 읽거나, 더 물어 가지치기. 링크도 오른쪽으로 펼쳐집니다.</div>
     <h2 class="sec">스레드 — 이 슬롯에 무엇이든 재귀로 붙습니다</h2>
-    ${actbar(n.id)}
+    ${actbar(n.id, false)}
     <div class="reply" data-rid="${esc(n.id)}"></div>
     ${threadHTML(n.thread || [])}`;
 
