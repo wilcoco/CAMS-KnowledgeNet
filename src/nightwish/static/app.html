@@ -164,11 +164,8 @@
 </header>
 
 <div class="grid">
-  <!-- LEFT: ask / search / queries -->
+  <!-- LEFT: search first (entry) → tree (organize under the root it spawns) -->
   <aside>
-    <h2 class="sec">지식 트리 <button class="link" id="tree-refresh" title="새로고침">↻</button></h2>
-    <div id="tree" class="prov">…</div>
-
     <h2 class="sec">질문하기 · 검색</h2>
     <textarea id="search" rows="3" placeholder="궁금한 것을 적고 Enter로 검색, 또는 AI에게 질문"></textarea>
     <div class="row">
@@ -176,6 +173,9 @@
       <button id="btn-ask">AI에게 질문</button>
     </div>
     <div id="results"></div>
+
+    <h2 class="sec">지식 트리 <button class="link" id="tree-refresh" title="새로고침">↻</button></h2>
+    <div id="tree" class="prov">…</div>
 
     <h2 class="sec">열린 질의 <button class="link" id="new-query">+ 새 질의</button></h2>
     <div id="query-form" style="display:none">
