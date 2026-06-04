@@ -1183,6 +1183,122 @@ def create_app() -> FastAPI:
                                 "pct": pct(len(mine), total)}
             return out
 
+    @app.get("/api/export")
+    def export_vault(user: str = "", space: str = "public", scope: str = "mine"):
+        """내가 정리한 것을 **옵시디안 볼트(zip)** 로 내보낸다(노트 10 B).
+
+        노드 하나 = Markdown 파일 하나. 본문의 ``[[Title]]`` 위키링크는 그대로라
+        옵시디안에서 바로 연결된다(파일명 = 제목). 프론트매터에 출처·권위·저작 등 메타,
+        아래에 연결·토론(보강/정정/후속) 섹션을 붙인다.
+
+        * ``scope=mine`` (기본) — 내가 저작한 노드만. ``scope=all`` — 보이는 전부.
+        """
+        import io
+        import re
+        import zipfile
+        from fastapi import Response
+
+        svc = get_service()
+        with svc.reading():
+            t = svc.tree
+            vis = [n for n in t.visible_nodes(space)
+                   if n.is_answer and not n.is_stub]
+            if scope == "mine":
+                if not user:
+                    raise HTTPException(400, "scope=mine 에는 user가 필요합니다")
+                picked = [n for n in vis if n.author == user]
+            else:
+                picked = vis
+
+            kind_ko = {"root": "개념", "fork": "정정/다른 답",
+                       "contribute": "기여", "comment": "보강"}
+
+            def safe_name(title: str, fallback: str) -> str:
+                name = re.sub(r'[\\/:*?"<>|#^\[\]]', " ", title or "").strip()
+                name = re.sub(r"\s+", " ", name)
+                return name[:80] or fallback
+
+            def yaml_str(s: str) -> str:
+                return '"' + str(s).replace('"', '\\"') + '"'
+
+            def thread_md(node_id: str, depth: int = 0) -> str:
+                out = []
+                for ch in t.children_of(node_id):
+                    if not t._visible(ch, space) or ch.is_stub:
+                        continue
+                    is_answer = (ch.action.value == "contribute" and not ch.question
+                                 and (ch.frozen or ch.author == "AI"))
+                    if is_answer:                      # AI 답은 질문 항목에 접어 넣음
+                        body = t.resolved_answer(ch.id).strip()
+                        if body:
+                            out.append("\n" + body + "\n")
+                        out.append(thread_md(ch.id, depth))
+                        continue
+                    lbl = ("후속질문" if (ch.action.value == "contribute" and ch.question)
+                           else kind_ko.get(ch.action.value, ch.action.value))
+                    head = ch.question.strip() or (ch.author + " 메모")
+                    out.append(f"\n{'#' * min(depth + 3, 6)} {lbl} — {head}")
+                    body = t.resolved_answer(ch.id).strip()
+                    if body:
+                        out.append("\n" + body + "\n")
+                    out.append(thread_md(ch.id, depth + 1))
+                return "".join(out)
+
+            def to_md(n) -> str:
+                fm = [
+                    "---",
+                    f"title: {yaml_str(n.question)}",
+                    f"slug: {yaml_str(n.slug or n.id)}",
+                    f"author: {yaml_str(n.author)}",
+                    f"kind: {yaml_str(kind_ko.get(n.action.value, n.action.value))}",
+                    f"authority: {round(t.authority_in(n.id, space), 4)}",
+                    f"staked: {round(sum(svc.econ.staked_on(n.id).values()), 4)}",
+                    f"space: {yaml_str(n.space)}",
+                ]
+                if n.frozen and n.model:
+                    fm.append(f"ai_model: {yaml_str(n.model)}")
+                if n.answered_at:
+                    fm.append(f"answered_at: {yaml_str(n.answered_at)}")
+                fm.append("source: Nightwish")
+                fm.append("---\n")
+                parts = ["\n".join(fm), f"# {n.question}\n", t.resolved_answer(n.id).strip(), ""]
+                links = [t.nodes[s].question for s in n.links
+                         if s in t.nodes]
+                if links:
+                    parts.append("\n## 연결")
+                    parts.append("\n".join(f"- [[{lt}]]" for lt in links))
+                thread = thread_md(n.id)
+                if thread.strip():
+                    parts.append("\n## 토론")
+                    parts.append(thread)
+                return "\n".join(parts).rstrip() + "\n"
+
+            buf = io.BytesIO()
+            used: dict[str, int] = {}
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                for n in picked:
+                    base = safe_name(n.question, n.id)
+                    if base in used:
+                        used[base] += 1
+                        fname = f"{base} ({used[base]}).md"
+                    else:
+                        used[base] = 0
+                        fname = f"{base}.md"
+                    zf.writestr(fname, to_md(n))
+                readme = (f"# Nightwish 내보내기\n\n사용자: {user or '(전체)'}\n"
+                          f"레이어: {space}\n범위: {scope}\n노드 수: {len(picked)}\n\n"
+                          "각 `.md` 파일은 옵시디안 노트입니다. `[[제목]]` 링크가 그대로 "
+                          "연결됩니다 — 이 폴더를 옵시디안 볼트로 여세요.\n")
+                zf.writestr("_README.md", readme)
+
+            who = re.sub(r"\W+", "-", user) or "all"
+            return Response(
+                content=buf.getvalue(),
+                media_type="application/zip",
+                headers={"Content-Disposition":
+                         f'attachment; filename="nightwish-{who}-{space}.zip"'},
+            )
+
     @app.get("/api/graph")
     def graph(space: str = "public"):
         svc = get_service()

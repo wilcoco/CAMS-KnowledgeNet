@@ -731,7 +731,10 @@ async function loadMeStats(){
     <div class="cat-detail" data-detail="all" style="display:none">${nodeLinks(allMine)}</div>
     <div class="prov" style="margin:8px 0 2px">영역(루트)별 · 영향력 권위 ${ov.authority} (${ov.authority_pct}%)</div>
     ${cats || '<div class="prov">아직 없음</div>'}
-    ${grp}`;
+    ${grp}
+    <div class="row" style="margin-top:8px">
+      <button class="sec" id="export-mine" title="내가 정리한 노드를 옵시디안 볼트(zip)로 — [[위키링크]] 그대로">⬇ 옵시디안으로 내보내기</button>
+    </div>`;
   // 클릭 → 상세 토글(다음 형제 .cat-detail). 전체는 data-detail="all"을 토글.
   const box = $('#me-stats');
   box.querySelectorAll('.cat-row').forEach(r => r.onclick = ()=>{
@@ -745,6 +748,9 @@ async function loadMeStats(){
     d.style.display = d.style.display==='none' ? 'block' : 'none';
   };
   box.querySelectorAll('.me-node').forEach(a => a.onclick = ()=> openNode(a.dataset.oid));
+  $('#export-mine').onclick = ()=>{
+    location.href = `/api/export?user=${encodeURIComponent(me())}&space=${space()}&scope=mine`;
+  };
 }
 
 async function loadScores(){
