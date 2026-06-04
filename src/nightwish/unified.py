@@ -22,7 +22,9 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import threading
+from html import unescape
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -111,6 +113,62 @@ def _ai_status() -> dict:
         "hint": "" if active else
                 "오프라인 스텁 — 실제 LLM을 켜려면 NIGHTWISH_ENABLE_LLM=1 + ANTHROPIC_API_KEY",
     }
+
+
+def _ai_active() -> bool:
+    return _ai_model != "offline-stub"
+
+
+# --- 웹 링크 읽고 요약 (보강/정정에 URL이 들어오면) -------------------------- #
+_URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
+
+
+def _first_url(text: str) -> str | None:
+    m = _URL_RE.search(text or "")
+    return m.group(0).rstrip(".,);!?") if m else None
+
+
+def _fetch_text(url: str, *, limit: int = 8000) -> str | None:
+    """Fetch a page and return readable-ish plain text (best-effort).
+
+    Server-side fetch needs outbound network (Railway: open; the dev sandbox is
+    allowlisted, so this returns None there). Strips script/style/tags, collapses
+    whitespace, truncates. Returns None on any failure.
+    """
+    try:
+        import httpx  # lazy
+
+        r = httpx.get(url, follow_redirects=True, timeout=12.0,
+                      headers={"User-Agent": "Nightwish/1.0 (+source summarizer)"})
+        r.raise_for_status()
+        if "text/html" not in r.headers.get("content-type", "") and not r.text:
+            return None
+        html = r.text
+        html = re.sub(r"(?is)<(script|style|noscript|template)\b.*?</\1>", " ", html)
+        html = re.sub(r"(?is)<[^>]+>", " ", html)              # drop tags
+        text = unescape(html)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:limit] or None
+    except Exception:  # noqa: BLE001 — network/parse failure → no summary
+        return None
+
+
+def _summarize_url(url: str) -> str | None:
+    """Read a URL's body and summarize it — grounded, not hallucinated.
+
+    Requires a live LLM (else the 'summary' would be stub noise) AND a successful
+    fetch. Returns a short Korean summary, or None if either is unavailable.
+    """
+    if not _ai_active():
+        return None
+    body = _fetch_text(url)
+    if not body:
+        return None
+    prompt = ("너는 웹페이지 본문을 요약한다. 아래 본문에 **실제로 있는 내용만** "
+              "근거로, 핵심을 한국어 3~5문장으로 요약하라. 본문에 없는 것은 절대 "
+              "지어내지 말 것.")
+    summary = _ask_ai(f"[{url}]\n\n{body}", prompt)
+    return (summary or "").strip() or None
 
 
 def _anchor_prompt(tree, node_id: str) -> str:
@@ -841,6 +899,15 @@ def create_app() -> FastAPI:
             else:
                 q = body.body
             ai_text = _ask_ai(q, _anchor_prompt(ctx_tree, node_id))
+        # 보강/정정에 웹 링크가 들어오면 그 페이지를 *읽고* 요약해 본문에 덧붙인다.
+        # 단일 원천·국소(노트 12) — 전역 재통합 아님. 네트워크/LLM 없으면 원문 그대로.
+        if kind in ("comment", "fork"):
+            src_url = _first_url(body.body)
+            if src_url:
+                summary = _summarize_url(src_url)
+                if summary:
+                    body.body = (body.body.rstrip()
+                                 + f"\n\n— 🔗 링크 요약 (AI · {src_url}):\n{summary}")
         with svc.writing():
             parent = svc.tree.nodes.get(node_id)
             if parent is None or not svc.tree._visible(parent, body.space):
