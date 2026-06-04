@@ -626,6 +626,54 @@ def create_app() -> FastAPI:
                 if n.parent_id is None and n.is_answer and not n.is_stub
             ]
 
+    @app.get("/api/tree")
+    def tree(space: str = "public"):
+        """The whole forest as a clickable directory (IDE-style explorer, 노트 09).
+
+        Top level = root concepts; each node nests its thread + contextual
+        unfolds via ``parent_id``. Wikilinks are *graph edges*, not tree
+        children, so the tree stays acyclic — they remain reachable from the
+        focus pane's 연결/백링크.
+        """
+        svc = get_service()
+        with svc.reading():
+            t = svc.tree
+
+            def kind_of(n) -> str:
+                if n.is_query:
+                    return "query"
+                if n.is_unfold:
+                    return "unfold"
+                return n.action.value
+
+            def label_of(n) -> str:
+                # answer-only nodes (e.g. a followup's AI reply) carry no
+                # question — fall back to a short snippet of the answer so the
+                # tree row isn't blank.
+                if n.question.strip():
+                    return n.question
+                body = (n.answer or "").strip().replace("\n", " ")
+                return (body[:30] + "…") if len(body) > 30 else body
+
+            def entry(n, depth: int = 0) -> dict:
+                kids = []
+                if depth < 24:
+                    for ch in t.children_of(n.id):
+                        if not t._visible(ch, space) or ch.is_stub:
+                            continue
+                        kids.append(entry(ch, depth + 1))
+                return {
+                    "id": n.id, "title": label_of(n), "kind": kind_of(n),
+                    "anchor": n.anchor,
+                    "authority": round(t.authority_in(n.id, space), 4),
+                    "children": kids,
+                }
+
+            roots = [entry(n) for n in t.visible_nodes(space)
+                     if n.parent_id is None and n.is_answer and not n.is_stub]
+            roots.sort(key=lambda e: -e["authority"])
+            return roots
+
     @app.get("/api/search")
     def search(q: str = "", space: str = "public"):
         svc = get_service()

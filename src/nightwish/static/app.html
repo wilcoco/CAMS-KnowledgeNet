@@ -35,6 +35,17 @@
   .crumbs a { color:var(--link); cursor:pointer; }
   @media (max-width:880px){ .grid { grid-template-columns:1fr; height:auto; }
     .pane { flex-basis:88vw; } }
+  /* LEFT: IDE-style knowledge tree explorer (노트 09) */
+  #tree { font-size:13px; max-height:42vh; overflow:auto; margin-bottom:4px;
+          border:1px solid var(--line); border-radius:8px; padding:4px 2px; }
+  .trow { display:flex; align-items:center; gap:3px; padding:2px 4px; border-radius:5px;
+          cursor:pointer; white-space:nowrap; }
+  .trow:hover { background:#1a1f29; }
+  .trow.cur { background:#1e3a2b; box-shadow:inset 2px 0 0 var(--good); }
+  .ttwist { flex:0 0 13px; text-align:center; color:var(--mut); user-select:none; }
+  .tlabel { overflow:hidden; text-overflow:ellipsis; }
+  .tkind { color:var(--mut); font-size:10px; }
+  .tkids { margin-left:9px; border-left:1px solid var(--line); padding-left:3px; }
   h2.sec { font-size:11px; color:var(--acc); text-transform:uppercase;
            letter-spacing:.5px; margin:16px 0 6px; }
   button { background:var(--acc); color:#0a0c10; border:0; border-radius:6px;
@@ -141,6 +152,9 @@
 <div class="grid">
   <!-- LEFT: ask / search / queries -->
   <aside>
+    <h2 class="sec">지식 트리 <button class="link" id="tree-refresh" title="새로고침">↻</button></h2>
+    <div id="tree" class="prov">…</div>
+
     <h2 class="sec">질문하기 · 검색</h2>
     <textarea id="search" rows="3" placeholder="궁금한 것을 적고 Enter로 검색, 또는 AI에게 질문"></textarea>
     <div class="row">
@@ -240,6 +254,7 @@ async function refreshStat(){
     `노드 ${s.node_count} · 질의 ${s.query_count} · ${s.hub_mode} · ${store}${saved} · ${aiTag}`;
   el.title = [p.error || p.hint || (p.backend==='postgres' ? `Postgres 영속 · 마지막 저장 ${p.last_saved_at||'?'}` : ''),
               ai.hint].filter(Boolean).join('\n');
+  loadTree();   // 노드 생성·평가 등으로 상태가 바뀌면 트리도 갱신(노트 09)
 }
 
 function adoptBadge(n){
@@ -342,7 +357,10 @@ function addPaneEl(n){
 }
 function focusPane(pane){
   panes().querySelectorAll('.pane.active').forEach(p=>p.classList.remove('active'));
-  if (pane) pane.classList.add('active');
+  if (pane){
+    pane.classList.add('active');
+    if (pane.dataset.nodeId) syncTree(pane.dataset.nodeId);   // 트리에 위치 반영
+  }
 }
 async function refreshPane(pane){
   try { fillPane(await fetchNode(pane.dataset.nodeId), pane); }
@@ -355,6 +373,68 @@ function closePane(pane){               // close this pane and everything to its
   if (!panes().children.length)         // 전부 닫히면 빈 안내
     panes().innerHTML = '<div class="empty">왼쪽에서 답을 고르거나, AI에게 질문해 새 노드를 만드세요.</div>';
   else focusPane(panes().lastChild);
+}
+
+// -- LEFT: knowledge tree explorer (노트 09) ---------------------------------
+// Root→sub directory of the whole forest (parent_id hierarchy). Clicking a row
+// opens that node in the center; the tree always highlights where you are.
+let treeData = [];          // nested roots from /api/tree
+let treeIndex = {};         // id → {title, parentId, kind}
+let treeOpen = {};          // id → expanded? (preserved across reloads)
+let curNodeId = null;       // node the center is currently focused on
+
+async function loadTree(){
+  try { treeData = await api('GET',`/api/tree?space=${space()}`); }
+  catch(e){ $('#tree').innerHTML = `<div class="prov err">${esc(e.message)}</div>`; return; }
+  treeIndex = {}; indexTree(treeData, null);
+  renderTree();
+}
+function indexTree(list, parentId){
+  list.forEach(n => {
+    treeIndex[n.id] = {title:n.title, parentId, kind:n.kind};
+    if (n.children && n.children.length) indexTree(n.children, n.id);
+  });
+}
+function treeRowHTML(n){
+  const kids = n.children && n.children.length;
+  const open = !!treeOpen[n.id];
+  const tw = kids ? (open ? '▾' : '▸') : '·';
+  const kindLabel = {comment:'보강', fork:'정정', unfold:'↳', query:'질의'}[n.kind] || '';
+  const label = (n.kind==='unfold' && n.anchor) ? `«${esc(n.anchor)}»` : esc(n.title);
+  const cur = n.id===curNodeId ? ' cur' : '';
+  return `<div class="tnode">
+    <div class="trow${cur}" data-id="${esc(n.id)}" data-kids="${kids?1:0}">
+      <span class="ttwist">${tw}</span>
+      <span class="tlabel">${kindLabel?`<span class="tkind">${kindLabel} </span>`:''}${label}</span>
+    </div>
+    ${kids ? `<div class="tkids" style="display:${open?'block':'none'}">${
+      n.children.map(treeRowHTML).join('')}</div>` : ''}
+  </div>`;
+}
+function renderTree(){
+  const box = $('#tree');
+  box.innerHTML = treeData.length
+    ? treeData.map(treeRowHTML).join('')
+    : '<div class="prov">아직 개념이 없습니다. 아래에서 AI에게 질문해 첫 노드를 만드세요.</div>';
+  box.querySelectorAll('.trow').forEach(row => {
+    const id = row.dataset.id;
+    if (row.dataset.kids==='1'){
+      row.querySelector('.ttwist').onclick = e => {
+        e.stopPropagation(); treeOpen[id] = !treeOpen[id]; renderTree();
+      };
+    }
+    row.onclick = () => openNode(id);
+  });
+  const cur = box.querySelector('.trow.cur');
+  if (cur) cur.scrollIntoView({block:'nearest'});
+}
+// reflect "where am I": expand ancestors of `id`, highlight + scroll to it
+function syncTree(id){
+  if (id === curNodeId) return;
+  curNodeId = id;
+  let p = treeIndex[id] && treeIndex[id].parentId;
+  while (p){ treeOpen[p] = true; p = treeIndex[p] && treeIndex[p].parentId; }
+  if (treeData.length) renderTree();
 }
 
 function threadHTML(list){
@@ -701,7 +781,8 @@ function updateLayerHint(){
   const sp = space();
   $('#layer-hint').textContent = sp==='public' ? '' : `· ${sp} 오버레이로 보는 중`;
 }
-function reloadAll(){ doSearch(); loadQueries(); loadScores(); loadLedger(); }
+function reloadAll(){ doSearch(); loadQueries(); loadScores(); loadLedger(); loadTree(); }
+$('#tree-refresh').onclick = loadTree;
 (async function init(){
   await refreshStat(); reloadAll(); updateLayerHint();
 })();
