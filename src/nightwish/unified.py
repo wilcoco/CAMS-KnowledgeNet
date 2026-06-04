@@ -630,38 +630,82 @@ def create_app() -> FastAPI:
     def tree(space: str = "public"):
         """The whole forest as a clickable directory (IDE-style explorer, 노트 09).
 
-        Top level = root concepts; each node nests its thread + contextual
-        unfolds via ``parent_id``. Wikilinks are *graph edges*, not tree
-        children, so the tree stays acyclic — they remain reachable from the
-        focus pane's 연결/백링크.
+        Under each concept hang **two kinds of children** (노트 09 계위):
+          * **contribution edges** (``parent_id``) — 보강·정정·후속질문·펼침: the
+            substantive human connections, shown as *expanded* branches.
+          * **link edges** (``n.links``) — concepts pointed at from this body
+            (drag/slug). They belong *under the root they were spawned from*,
+            but slugs form a graph (cycles, multi-parent), so each is rendered
+            as a clickable **reference leaf** (``via="link"``, not re-expanded)
+            — "under its root" without looping or exploding the tree.
         """
         svc = get_service()
         with svc.reading():
             t = svc.tree
 
             def kind_of(n) -> str:
+                # map raw action → the user-facing kind. CONTRIBUTE is overloaded
+                # (후속질문 질문노드 / 그 AI 답 / 보강), so split by shape.
                 if n.is_query:
                     return "query"
                 if n.is_unfold:
                     return "unfold"
-                return n.action.value
+                a = n.action.value
+                if a in ("root", "fork"):
+                    return a
+                if a == "contribute":
+                    if n.question.strip():
+                        return "followup"          # 후속질문(질문 노드)
+                    if n.frozen or n.author == "AI":
+                        return "answer"            # 후속질문에 대한 AI 답(트리선 접음)
+                    return "comment"               # 보강
+                return a
 
             def label_of(n) -> str:
-                # answer-only nodes (e.g. a followup's AI reply) carry no
-                # question — fall back to a short snippet of the answer so the
-                # tree row isn't blank.
                 if n.question.strip():
                     return n.question
                 body = (n.answer or "").strip().replace("\n", " ")
                 return (body[:30] + "…") if len(body) > 30 else body
 
+            def child_entries(parent_id: str, depth: int):
+                """Contribution children, with each followup's AI-answer node
+                **folded into its question** (its own children lift up), so the
+                tree shows one row per Q&A instead of a blank answer row."""
+                out, shown = [], set()
+                if depth >= 24:
+                    return out, shown
+                for ch in t.children_of(parent_id):
+                    if not t._visible(ch, space) or ch.is_stub:
+                        continue
+                    if kind_of(ch) == "answer":
+                        sub, sub_shown = child_entries(ch.id, depth)
+                        out.extend(sub)
+                        shown |= sub_shown
+                    else:
+                        out.append(entry(ch, depth + 1))
+                        shown.add(ch.id)
+                return out, shown
+
+            def ref_leaf(n) -> dict:
+                return {
+                    "id": n.id, "title": label_of(n), "kind": kind_of(n),
+                    "anchor": n.anchor, "via": "link",
+                    "authority": round(t.authority_in(n.id, space), 4),
+                    "children": [],
+                }
+
             def entry(n, depth: int = 0) -> dict:
-                kids = []
+                # 1) 사람 기여(보강/정정/후속/펼침) — 가장 중요한 연결, 펼쳐지는 가지
+                kids, shown = child_entries(n.id, depth)
+                # 2) 이 본문에서 가리킨 개념(slug/드래그) — 루트 밑 참조 잎(→)
                 if depth < 24:
-                    for ch in t.children_of(n.id):
-                        if not t._visible(ch, space) or ch.is_stub:
+                    for s in n.links:
+                        tgt = t.nodes.get(s)
+                        if (tgt is None or s in shown or not t._visible(tgt, space)
+                                or tgt.is_stub):
                             continue
-                        kids.append(entry(ch, depth + 1))
+                        kids.append(ref_leaf(tgt))
+                        shown.add(s)
                 return {
                     "id": n.id, "title": label_of(n), "kind": kind_of(n),
                     "anchor": n.anchor,

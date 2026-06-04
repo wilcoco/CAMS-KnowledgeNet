@@ -54,8 +54,10 @@
   .tnode.root > .trow { margin-top:3px; }
   .tnode.root > .trow .tlabel { font-weight:700; }
   .tnode.root > .trow .tlabel::before { content:"◆ "; color:var(--acc); font-weight:400; }
-  /* annotations (보강/정정) read as "on the answer", so muted; sub-questions stay bright */
-  .trow.annot .tlabel { color:var(--mut); }
+  /* link refs (slug/드래그로 가리킨 개념) = 루트 밑 참조 — 흐리게 + → 표시.
+     사람 기여(보강/정정/후속)는 알맹이라 밝게 둔다. */
+  .trow.ref .tlabel { color:var(--mut); }
+  .trow.ref .tlabel::before { content:"→ "; color:var(--link); }
   /* each level steps in with its own guide rail */
   .tkids { margin-left:7px; border-left:1px solid var(--line); padding-left:7px; }
   h2.sec { font-size:11px; color:var(--acc); text-transform:uppercase;
@@ -411,15 +413,15 @@ function treeRowHTML(n, depth){
   const kids = n.children && n.children.length;
   const open = !!treeOpen[n.id];
   const tw = kids ? (open ? '▾' : '▸') : '·';
-  // 보강/정정 = 답에 붙는 주석(계위상 하위 아님), 후속 = 하위 질문(계위), 펼침 = 맥락
+  // 사람 기여(보강/정정/후속/펼침) = 펼쳐지는 가지. via=link = 루트 밑 참조 잎.
   const kindMap = {comment:'보강', fork:'정정', followup:'후속', unfold:'↳', query:'질의'};
   const kindCls = n.kind==='contribute' ? (n.title ? 'followup' : '') : n.kind;
-  const kindLabel = kindMap[kindCls] || '';
-  const annot = (n.kind==='comment' || n.kind==='fork') ? ' annot' : '';
+  const kindLabel = n.via==='link' ? '' : (kindMap[kindCls] || '');
+  const ref = n.via==='link' ? ' ref' : '';
   const label = (n.kind==='unfold' && n.anchor) ? `«${esc(n.anchor)}»` : esc(n.title);
   const cur = n.id===curNodeId ? ' cur' : '';
   return `<div class="tnode${depth===0?' root':''}">
-    <div class="trow${cur}${annot}" data-id="${esc(n.id)}" data-kids="${kids?1:0}">
+    <div class="trow${cur}${ref}" data-id="${esc(n.id)}" data-kids="${kids?1:0}">
       <span class="ttwist">${tw}</span>
       <span class="tlabel">${kindLabel?`<span class="tkind ${kindCls}">${kindLabel}</span>`:''}${label}</span>
     </div>
