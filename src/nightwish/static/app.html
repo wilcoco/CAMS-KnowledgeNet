@@ -35,8 +35,16 @@
   .crumbs a { color:var(--link); cursor:pointer; }
   @media (max-width:880px){ .grid { grid-template-columns:1fr; height:auto; }
     .pane { flex-basis:88vw; } }
+  /* LEFT: Windsurf-style tabs (검색 / 위치) */
+  .tabs { display:flex; gap:2px; border-bottom:1px solid var(--line);
+          margin:-12px -12px 10px; padding:0 8px; }
+  .tab { background:none; color:var(--mut); border:0; border-bottom:2px solid transparent;
+         border-radius:0; padding:7px 12px; font-weight:600; cursor:pointer; }
+  .tab:hover { color:var(--fg); }
+  .tab.active { color:var(--acc); border-bottom-color:var(--acc); }
+  .tab.ping::after { content:"●"; color:var(--good); font-size:8px; margin-left:5px; vertical-align:2px; }
   /* LEFT: IDE-style knowledge tree explorer (노트 09) */
-  #tree { font-size:13px; max-height:42vh; overflow:auto; margin-bottom:4px;
+  #tree { font-size:13px; overflow:auto; margin-bottom:4px;
           border:1px solid var(--line); border-radius:8px; padding:5px 4px; }
   .trow { display:flex; align-items:center; gap:4px; padding:2px 4px; border-radius:5px;
           cursor:pointer; white-space:nowrap; }
@@ -164,26 +172,34 @@
 </header>
 
 <div class="grid">
-  <!-- LEFT: search first (entry) → tree (organize under the root it spawns) -->
+  <!-- LEFT: Windsurf-style tabs — 검색(진입) / 위치(트리 탐색기) -->
   <aside>
-    <h2 class="sec">질문하기 · 검색</h2>
-    <textarea id="search" rows="3" placeholder="궁금한 것을 적고 Enter로 검색, 또는 AI에게 질문"></textarea>
-    <div class="row">
-      <button id="btn-search" class="sec">검색</button>
-      <button id="btn-ask">AI에게 질문</button>
+    <div class="tabs">
+      <button class="tab active" data-tab="search">🔍 검색</button>
+      <button class="tab" data-tab="tree">🗺 위치</button>
     </div>
-    <div id="results"></div>
 
-    <h2 class="sec">지식 트리 <button class="link" id="tree-refresh" title="새로고침">↻</button></h2>
-    <div id="tree" class="prov">…</div>
+    <div class="tabpane" id="tab-search">
+      <textarea id="search" rows="3" placeholder="궁금한 것을 적고 Enter로 검색, 또는 AI에게 질문"></textarea>
+      <div class="row">
+        <button id="btn-search" class="sec">검색</button>
+        <button id="btn-ask">AI에게 질문</button>
+      </div>
+      <div id="results"></div>
 
-    <h2 class="sec">열린 질의 <button class="link" id="new-query">+ 새 질의</button></h2>
-    <div id="query-form" style="display:none">
-      <input id="q-title" placeholder="공개 질문 제목" style="width:100%" />
-      <textarea id="q-detail" rows="2" placeholder="배경/근거(선택)" style="width:100%;margin-top:4px"></textarea>
-      <div class="row"><button id="q-post">질의 등록</button></div>
+      <h2 class="sec">열린 질의 <button class="link" id="new-query">+ 새 질의</button></h2>
+      <div id="query-form" style="display:none">
+        <input id="q-title" placeholder="공개 질문 제목" style="width:100%" />
+        <textarea id="q-detail" rows="2" placeholder="배경/근거(선택)" style="width:100%;margin-top:4px"></textarea>
+        <div class="row"><button id="q-post">질의 등록</button></div>
+      </div>
+      <div id="queries"></div>
     </div>
-    <div id="queries"></div>
+
+    <div class="tabpane" id="tab-tree" style="display:none">
+      <h2 class="sec">지식 트리 — 내 위치 <button class="link" id="tree-refresh" title="새로고침">↻</button></h2>
+      <div id="tree" class="prov">…</div>
+    </div>
   </aside>
 
   <!-- CENTER: node detail + recursive thread -->
@@ -453,6 +469,9 @@ function syncTree(id){
   let p = treeIndex[id] && treeIndex[id].parentId;
   while (p){ treeOpen[p] = true; p = treeIndex[p] && treeIndex[p].parentId; }
   if (treeData.length) renderTree();
+  // 위치 탭이 숨겨져 있으면 "여기 새 위치" 표시(● ping)
+  const tab = document.querySelector('.tab[data-tab="tree"]');
+  if (tab && $('#tab-tree') && $('#tab-tree').style.display==='none') tab.classList.add('ping');
 }
 
 function threadHTML(list){
@@ -801,6 +820,19 @@ function updateLayerHint(){
 }
 function reloadAll(){ doSearch(); loadQueries(); loadScores(); loadLedger(); loadTree(); }
 $('#tree-refresh').onclick = loadTree;
+
+// 좌측 탭 전환 (Windsurf식: 검색 / 위치)
+function showTab(name){
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab===name));
+  $('#tab-search').style.display = name==='search' ? '' : 'none';
+  $('#tab-tree').style.display   = name==='tree'   ? '' : 'none';
+  if (name==='tree'){
+    document.querySelector('.tab[data-tab="tree"]').classList.remove('ping');
+    const cur = $('#tree').querySelector('.trow.cur');   // 탭 열 때 현재 위치로 스크롤
+    if (cur) cur.scrollIntoView({block:'nearest'});
+  }
+}
+document.querySelectorAll('.tab').forEach(t => t.onclick = ()=> showTab(t.dataset.tab));
 (async function init(){
   await refreshStat(); reloadAll(); updateLayerHint();
 })();
