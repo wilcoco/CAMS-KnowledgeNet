@@ -147,6 +147,8 @@
   .me-node { color:var(--link); cursor:pointer; display:block; padding:1px 0;
              overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   a.wl { color:var(--link); cursor:pointer; }
+  a.ext { color:var(--link); text-decoration:underline; }
+  a.ext::after { content:"↗"; font-size:10px; opacity:.7; margin-left:1px; }
   .err { color:var(--stub); font-size:12px; }
   code { background:#0c0e13; padding:1px 5px; border-radius:4px; }
 </style>
@@ -275,9 +277,16 @@ function toast(msg, ms=3500){
 }
 const esc = s => (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
-// render [[wikilinks]] as clickable
+// render [[wikilinks]] + bare http(s) URLs as clickable
 function renderText(t){
-  return esc(t).replace(/\[\[([^\]]+)\]\]/g, (_,n)=>`<a class="wl" data-link="${esc(n)}">${esc(n)}</a>`);
+  return esc(t)
+    // URL 먼저(아직 태그가 없는 평문 단계) → 외부 링크. 끝 문장부호는 링크에서 제외.
+    .replace(/(https?:\/\/[^\s<"]+)/g, m => {
+      const tail = (m.match(/[.,);!?]+$/) || [''])[0];
+      const url = m.slice(0, m.length - tail.length);
+      return `<a class="ext" href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>${tail}`;
+    })
+    .replace(/\[\[([^\]]+)\]\]/g, (_,n)=>`<a class="wl" data-link="${esc(n)}">${esc(n)}</a>`);
 }
 
 async function refreshStat(){
@@ -683,7 +692,9 @@ function showReply(id, act, pane){
   // break CSS id selectors, so match data-rid by value)
   const box = [...pane.querySelectorAll('.reply')].find(r => r.dataset.rid === id);
   if (!box) return;
-  const ph = {comment:'보강할 의견', fork:'정정 또는 다른 답', followup:'후속 질문'}[act];
+  const ph = {comment:'보강할 의견 — 웹 링크(URL) 붙여넣어도 됩니다',
+              fork:'정정 또는 다른 답 — 근거 웹 링크(URL) 붙여넣어도 됩니다',
+              followup:'후속 질문'}[act];
   const goLabel = act==='followup' ? 'AI에게 묻기' : '보내기';
   box.innerHTML = `<textarea placeholder="${ph}"></textarea>
     <div class="row"><button data-go>${goLabel}</button>
