@@ -76,8 +76,8 @@
              background:var(--panel); border:1px solid var(--acc); border-radius:8px;
              box-shadow:0 6px 20px rgba(0,0,0,.45); }
   #sel-pop input { width:100%; margin:4px 0; }
-  #sel-pop button.suggested { outline:2px solid var(--good); outline-offset:1px; }
   #sel-hint { margin-top:6px; min-height:14px; }
+  #sel-exist { margin:2px 0 4px; }
   /* 작업 결과(평가·채우기 등) 토스트 — 패널 재렌더로 사라지지 않게 화면 상단 고정 */
   #toast { position:fixed; top:10px; left:50%; transform:translateX(-50%); z-index:70;
            display:none; max-width:80vw; padding:8px 14px; border-radius:8px;
@@ -94,14 +94,9 @@
   .c.fork { border-color:var(--fork); }
   .c .body { white-space:pre-wrap; margin:2px 0; }
   .kind-tag { font-size:11px; color:var(--mut); }
-  /* 맥락 펼침(노트 07): 구절 밑줄 + 인라인 재귀 블록 */
-  .uf-anchor { text-decoration:underline dotted var(--acc); text-underline-offset:2px; cursor:pointer; }
-  .uf-anchor:hover { background:rgba(122,162,255,.16); }
-  .unfolds { margin:6px 0 2px; }
-  .unfold { border-left:2px solid var(--acc); padding:4px 0 4px 10px; margin:6px 0 6px 2px; }
-  .unfold > summary.uf-head { cursor:pointer; font-size:12px; color:var(--mut); list-style:none; }
-  .unfold > summary.uf-head::-webkit-details-marker { display:none; }
-  .unfold .answer { margin:6px 0; }
+  /* 상시 '묻기' 입력(노트 08) — 답 바로 아래, 읽고 부족하면 그 자리서 가지치기 */
+  .ask-row { display:flex; gap:6px; margin:8px 0; }
+  .ask-row input { flex:1; }
   .actbar { display:flex; gap:6px; flex-wrap:wrap; margin-top:4px; }
   .actbar button { padding:3px 8px; font-size:12px; font-weight:500; }
   .reply { margin-top:6px; }
@@ -119,10 +114,10 @@
 <div id="toast"></div>
 <div id="sel-pop">
   <div class="prov" id="sel-src"></div>
-  <input id="sel-q" placeholder="질문(선택) — 비우면 이 구절을 그대로" />
+  <div id="sel-exist"></div>
+  <input id="sel-q" placeholder="이 주제를 물어보기 (Enter) — 비우면 구절 그대로" />
   <div class="row">
-    <button id="sel-ask" title="전역 개념으로 연결 — 오른쪽 패널로 펼침(커먼즈)">🌐 보편 개념</button>
-    <button id="sel-unfold" title="이 맥락에서 펼침 — 이 자리에 인라인 재귀(국소)">↳ 맥락 펼침</button>
+    <button id="sel-ask" title="이 주제를 우측 패널로 열기 — 있으면 연결, 없으면 AI가 정리">🤖 묻고 열기</button>
     <button class="sec" id="sel-close">닫기</button>
   </div>
   <div class="prov" id="sel-hint"></div>
@@ -383,7 +378,7 @@ function threadHTML(list){
       </div>` : '';
     const grpBadge = c.space && c.space!=='public'
       ? ` <span class="badge" title="이 그룹에서만 보이는 사적 기여">${esc(c.space)}</span>` : '';
-    return `<div class="c ${cls}">
+    return `<div class="c ${cls}" data-node-id="${esc(c.id)}">
       <div class="who"><span class="kind-tag">${tag}</span> · ${esc(c.author)}${frozen}${grpBadge}
         · 권위 ${c.authority}</div>
       ${title}
@@ -394,36 +389,6 @@ function threadHTML(list){
       ${threadHTML(c.replies)}
     </div>`;
   }).join('') + '</div>';
-}
-
-// 본문 HTML에서 각 펼침의 anchor(구절) 첫 등장에 밑줄을 입힌다(노트 07)
-function markAnchors(html, unfolds){
-  (unfolds || []).forEach(u => {
-    const q = esc(u.anchor || '');
-    if (!q) return;
-    const i = html.indexOf(q);
-    if (i >= 0) html = html.slice(0, i)
-      + `<span class="uf-anchor" data-uid="${esc(u.id)}">${q}</span>` + html.slice(i + q.length);
-  });
-  return html;
-}
-
-// 맥락 펼침을 인라인 재귀 블록으로. 평가/기여 버튼은 패널 단위 와이어링이 잡는다.
-function unfoldsHTML(list){
-  if (!list || !list.length) return '';
-  return `<div class="unfolds">` + list.map(u => `
-    <details class="unfold" open data-ufid="${esc(u.id)}" data-node-id="${esc(u.id)}">
-      <summary class="uf-head">↳ «${esc(u.anchor)}» · ${esc(u.author)}${u.frozen?' · AI':''} · 권위 ${u.authority}</summary>
-      <div class="answer">${markAnchors(renderText(u.answer), u.unfolds)}</div>
-      <div class="row eval-row"><input class="eval-amt" type="number" value="10" style="width:64px"/>
-        <button class="sec eval-btn" data-eid="${esc(u.id)}" title="이 펼침을 평가">평가</button>
-        <button class="sec uf-promote" data-pid="${esc(u.id)}" title="이 맥락 펼침을 보편 개념(커먼즈)으로 승격 — 초안으로 시작">⤴ 승격</button>
-        <span class="prov eval-out">· 스테이크 ${u.staked}</span></div>
-      ${actbar(u.id)}
-      <div class="reply" data-rid="${esc(u.id)}"></div>
-      ${unfoldsHTML(u.unfolds)}
-      ${threadHTML(u.thread)}
-    </details>`).join('') + `</div>`;
 }
 
 function actbar(id){
@@ -464,6 +429,12 @@ function fillPane(n, c){
   const stubFill = n.is_stub ? `
     <div class="row"><button class="btn-fill">🪄 AI로 이 개념 채우기</button>
       <span class="prov fill-out"></span></div>` : '';
+  // 상시 '묻기' — 답을 읽고 부족하면 그 자리서 가지치기(노트 08)
+  const askRow = (!n.is_query && !n.is_stub) ? `
+    <div class="ask-row">
+      <input class="ask-q" placeholder="이 주제를 더 묻기 → 가지치기 (Enter)"/>
+      <button class="sec ask-go">🤖 묻기</button>
+    </div>` : '';
   c.innerHTML = `
     <button class="pane-close" title="이 패널(과 오른쪽)을 닫기">×</button>
     <div class="node-head">
@@ -477,8 +448,8 @@ function fillPane(n, c){
     ${coauthorsHTML(n.coauthors)}
     ${n.is_query ? '' : (n.is_stub
       ? `<div class="answer prov">아직 비어 있는 개념입니다 — 위키링크로 자리만 잡혔어요. 아래 버튼으로 AI 정리를 생성하세요.</div>`
-      : `<div class="answer">${markAnchors(renderText(n.answer), n.unfolds)}</div>`)}
-    ${unfoldsHTML(n.unfolds)}
+      : `<div class="answer">${renderText(n.answer)}</div>`)}
+    ${askRow}
     ${queryAnswer}${endorse}${stubFill}
     ${n.outlinks && n.outlinks.length ? `<div class="prov">연결: ${
       n.outlinks.map(o=>`<a class="ol" data-oid="${esc(o.id)}">${esc(o.title)}</a>`).join(', ')
@@ -486,7 +457,7 @@ function fillPane(n, c){
     ${n.backlinks && n.backlinks.length ? `<div class="prov">백링크: ${
       n.backlinks.map(b=>`<a class="wl" data-link="${esc(b.title)}">${esc(b.title)}</a>`).join(', ')
     }</div>`:''}
-    <div class="prov" style="margin-top:4px">💡 본문에서 단어·문장을 드래그하면 AI에게 묻고 연결할 수 있어요. · 링크를 누르면 오른쪽에 펼쳐집니다.</div>
+    <div class="prov" style="margin-top:4px">💡 본문 어디든 드래그하면 그 주제가 오른쪽에 열려요 — 읽거나, 더 물어 가지치기. 링크도 오른쪽으로 펼쳐집니다.</div>
     <h2 class="sec">스레드 — 이 슬롯에 무엇이든 재귀로 붙습니다</h2>
     ${actbar(n.id)}
     <div class="reply" data-rid="${esc(n.id)}"></div>
@@ -494,23 +465,15 @@ function fillPane(n, c){
 
   c.querySelector('.pane-close').onclick = ()=> closePane(c);
 
-  // 본문의 밑줄친 구절 → 그 맥락 펼침 블록으로 점프(노트 07)
-  c.querySelectorAll('.uf-anchor').forEach(a => a.onclick = ()=>{
-    const d = [...c.querySelectorAll('.unfold')].find(x => x.dataset.ufid === a.dataset.uid);
-    if (d){ d.open = true; d.scrollIntoView({block:'nearest'}); }
-  });
-  // 맥락 펼침 → 보편 개념으로 승격(b→a). 초안 개념으로 시작, 오른쪽 패널로 펼침.
-  c.querySelectorAll('.uf-promote').forEach(b => b.onclick = async ()=>{
-    try{
-      const r = await withBusy('보편 개념으로 승격 중…',
-        ()=> api('POST',`/api/nodes/${encodeURIComponent(b.dataset.pid)}/promote`,
-          {author:me(), space:space()}), b);
-      toast(r.created ? `'${r.concept.title}' 보편 개념 생성(초안) — 평가하면 채택`
-                      : `기존 개념 '${r.concept.title}'에 연결`);
-      await refreshStat(); loadScores(); refreshPane(c);
-      await pushPane(r.concept.id, c);
-    }catch(e){ alert('승격 실패: ' + e.message); }
-  });
+  // 상시 '묻기' → 후속 가지(이 주제를 더 파고들기). 노트 08.
+  const askGo = c.querySelector('.ask-go');
+  if (askGo){
+    const fire = ()=>{ const q = c.querySelector('.ask-q').value.trim();
+      if (q) submitContrib(n.id, 'followup', q, askGo, c); };
+    askGo.onclick = fire;
+    c.querySelector('.ask-q').addEventListener('keydown',
+      ev=>{ if (ev.key==='Enter'){ ev.preventDefault(); fire(); } });
+  }
 
   // 링크는 *오른쪽 새 패널*로 펼친다(흐름 보존). 본문 [[wikilink]]는 제목→id를
   // outlink/backlink 맵으로 해소; 못 찾으면 검색으로 폴백.
@@ -637,9 +600,19 @@ async function loadLedger(){
   $('#ledger').innerHTML = `잔액 — ${bals||'없음'}<br>소각 ${l.burned}`;
 }
 
-// -- 본문 드래그 → (a) 보편 개념 연결  /  (b) 맥락 펼침 (노트 07) ------------
-// 선택이 일어난 패널 + *가장 가까운 노드*(중첩 펼침 안이면 그 펼침) + 원본 구절
+// -- 가리키기: 본문 구절 드래그 → 우측에 그 주제를 연다(노트 08) --------------
+// slug 링크 클릭과 동일한 단일 제스처. 선택 패널 + 가장 가까운 노드(스레드 가지 포함)
 let selPane = null, selNodeId = null, selText = '';
+function pointOpen(question){           // 가리킨 주제를 우측 패널로 열기(있으면 연결)
+  return withBusy('AI에게 묻고 여는 중…',
+    ()=> api('POST',`/api/nodes/${encodeURIComponent(selNodeId)}/expand`,
+      {question, author:me(), space:space()}), $('#sel-ask'))
+    .then(async r=>{
+      $('#sel-pop').style.display='none';
+      await refreshStat(); refreshPane(selPane);        // 연결 반영(어느 깊이든)
+      await pushPane(r.target.id, selPane);             // 그 주제를 오른쪽 패널로
+    });
+}
 document.addEventListener('mouseup', e=>{
   const pop = $('#sel-pop');
   if (e.target.closest('#sel-pop')) return;            // 팝업 안 클릭은 무시
@@ -648,51 +621,38 @@ document.addEventListener('mouseup', e=>{
   const anchorEl = sel && sel.anchorNode
     ? (sel.anchorNode.nodeType===3 ? sel.anchorNode.parentElement : sel.anchorNode) : null;
   const pane = anchorEl ? anchorEl.closest('.pane') : null;
-  // 답 본문 안에서 고른 텍스트만 — 어느 깊이의 펼침이든 동작
-  if (!text || !pane || !anchorEl.closest('.answer')){ pop.style.display='none'; return; }
-  const host = anchorEl.closest('[data-node-id]');     // 펼침 블록 or 패널 루트
+  // 답 본문 또는 스레드 가지 본문에서 고른 텍스트만 — 어느 깊이서나 동작
+  if (!text || !pane || !anchorEl.closest('.answer, .body')){ pop.style.display='none'; return; }
+  const host = anchorEl.closest('[data-node-id]');     // 스레드 가지 or 패널 루트
   selPane = pane; selNodeId = host ? host.dataset.nodeId : pane.dataset.nodeId; selText = text;
   const r = sel.getRangeAt(0).getBoundingClientRect();
   pop.style.left = r.left + 'px'; pop.style.top = (r.bottom + 6) + 'px';   // #sel-pop=fixed
   $('#sel-q').value = text;
   $('#sel-src').textContent = `선택: "${text.slice(0,40)}${text.length>40?'…':''}"`;
+  $('#sel-exist').innerHTML = ''; $('#sel-hint').textContent = '';
   pop.style.display = 'block';
-  // AI/휴리스틱이 (a)보편개념 / (b)맥락펼침 제안 → 해당 버튼 강조(노트 07 D2)
-  $('#sel-ask').classList.remove('suggested'); $('#sel-unfold').classList.remove('suggested');
-  $('#sel-hint').textContent = '🤖 분류 중…';
-  const ctx = (pane._node && pane._node.answer || '').slice(0, 200);
-  api('POST','/api/classify',{span:text, context:ctx}).then(r=>{
+  // "이미 정리된 게 있나" 존재 확인 → 있으면 '바로 열기'(읽기) 지름길(노트 08)
+  api('POST','/api/classify',{span:text}).then(r=>{
     if (selText !== text || pop.style.display==='none') return;   // 선택 바뀌면 무시
-    $('#sel-hint').textContent = r.reason || '';
-    (r.suggestion==='concept' ? $('#sel-ask') : $('#sel-unfold')).classList.add('suggested');
-  }).catch(()=> { $('#sel-hint').textContent=''; });
+    if (r.existing){
+      $('#sel-exist').innerHTML =
+        `<div class="prov">이미 정리됨: <a class="ol" id="sel-open">${esc(r.existing.title)}</a> — 읽거나, 더 물어보세요</div>`;
+      $('#sel-open').onclick = ()=>{ $('#sel-pop').style.display='none'; pushPane(r.existing.id, selPane); };
+    } else {
+      $('#sel-hint').textContent = '새 주제 — 물으면 AI가 정리합니다';
+    }
+  }).catch(()=>{});
 });
 $('#sel-close').onclick = ()=> $('#sel-pop').style.display='none';
-// (a) 보편 개념 — 전역 개념으로 연결 + 오른쪽 패널로 펼침(커먼즈)
-$('#sel-ask').onclick = async ()=>{
+// 묻고 열기 — 그 주제를 우측 패널로(있으면 연결, 없으면 AI 정리). 단일 경로.
+$('#sel-ask').onclick = ()=>{
   const q = $('#sel-q').value.trim() || selText;
   if (!q || !selNodeId || !selPane || !selPane.isConnected) return;
-  try{
-    const r = await withBusy('AI에게 묻고 연결 중…',
-      ()=> api('POST',`/api/nodes/${encodeURIComponent(selNodeId)}/expand`,
-        {question:q, author:me(), space:space()}), $('#sel-ask'));
-    $('#sel-pop').style.display='none';
-    await refreshStat(); refreshPane(selPane);          // 연결 반영(어느 깊이든)
-    await pushPane(r.target.id, selPane);               // 새 개념을 오른쪽 패널로
-  }catch(e){ alert('실패: ' + e.message); }
+  pointOpen(q).catch(e=> alert('실패: ' + e.message));
 };
-// (b) 맥락 펼침 — 이 구절을 그 자리에 인라인 재귀로(국소)
-$('#sel-unfold').onclick = async ()=>{
-  if (!selText || !selNodeId || !selPane || !selPane.isConnected) return;
-  try{
-    await withBusy('AI가 이 맥락에서 펼치는 중…',
-      ()=> api('POST',`/api/nodes/${encodeURIComponent(selNodeId)}/contribute`,
-        {kind:'unfold', author:me(), anchor:selText, body:$('#sel-q').value.trim(), space:space()}),
-      $('#sel-unfold'));
-    $('#sel-pop').style.display='none';
-    await refreshStat(); refreshPane(selPane);          // 인라인 펼침 반영
-  }catch(e){ alert('실패: ' + e.message); }
-};
+$('#sel-q').addEventListener('keydown', e=>{
+  if (e.key==='Enter'){ e.preventDefault(); $('#sel-ask').click(); }
+});
 
 // -- wiring ------------------------------------------------------------------
 $('#btn-search').onclick = doSearch;
