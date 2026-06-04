@@ -1109,6 +1109,80 @@ def create_app() -> FastAPI:
                 ],
             }
 
+    @app.get("/api/me/stats")
+    def me_stats(user: str, space: str = "public"):
+        """개인 프로필 — 지식 영역 점유율(노트 10 워크스트림 B).
+
+        세 층위로 *내가 만든 것*의 몫을 센다:
+          * **전체** — 보이는 노드 중 내가 저작한 비율(+ 권위 점유율 = 영향력).
+          * **영역별** — 영역 = 최상위 루트 + 그 서브트리(emergent, 별도 택소노미
+            없음). 각 영역 안에서 내 저작 비율.
+          * **그룹** — 그룹 레이어로 보면 그 오버레이 안에서의 몫 + 그룹 안목(hub).
+        숫자 클릭용 상세는 ``detail``로 영역별 내 노드 목록을 함께 돌려준다.
+        """
+        svc = get_service()
+        with svc.reading():
+            t = svc.tree
+            vis = [n for n in t.visible_nodes(space)
+                   if n.is_answer and not n.is_stub]
+            total = len(vis)
+            mine = [n for n in vis if n.author == user]
+
+            def auth_sum(ns):
+                return sum(t.authority_in(n.id, space) for n in ns)
+
+            tot_auth, my_auth = auth_sum(vis), auth_sum(mine)
+            ids = {n.id for n in vis}
+
+            def subtree(rid):                      # parent_id 후손(자신 포함) ∩ 가시
+                out, stack = [], [rid]
+                while stack:
+                    cur = stack.pop()
+                    if cur in ids:
+                        out.append(cur)
+                    stack.extend(c.id for c in t.children_of(cur))
+                return out
+
+            cats = []
+            for r in vis:
+                if r.parent_id is not None:
+                    continue
+                sub = subtree(r.id)
+                if not sub:
+                    continue
+                mysub = [nid for nid in sub
+                         if t.nodes[nid].author == user]
+                cats.append({
+                    "id": r.id, "title": r.question,
+                    "authored": len(mysub), "total": len(sub),
+                    "pct": round(100 * len(mysub) / len(sub), 1),
+                    "mine": [{"id": nid, "title": t.nodes[nid].question
+                              or "(답)"} for nid in mysub],
+                })
+            cats.sort(key=lambda c: (-c["authored"], -c["total"]))
+
+            def pct(a, b):
+                return round(100 * a / b, 1) if b else 0.0
+
+            out = {
+                "user": user, "space": space,
+                "overall": {
+                    "authored": len(mine), "total": total, "pct": pct(len(mine), total),
+                    "authority": round(my_auth, 4),
+                    "authority_pct": pct(my_auth, tot_auth),
+                },
+                "hub": round(t.scoring.hub_of(user), 4),
+                "categories": cats,
+            }
+            if t._is_group(space):
+                ghub = t.scoring.hub_of(user)
+                if space in t.group_scoring:
+                    ghub += t.group_scoring[space].hub_of(user)
+                out["group"] = {"space": space, "hub": round(ghub, 4),
+                                "authored": len(mine), "total": total,
+                                "pct": pct(len(mine), total)}
+            return out
+
     @app.get("/api/graph")
     def graph(space: str = "public"):
         svc = get_service()

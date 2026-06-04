@@ -137,6 +137,15 @@
   .empty { color:var(--mut); padding:20px; text-align:center; }
   .sc { display:flex; justify-content:space-between; font-size:13px; padding:2px 0; }
   .sc .v { color:var(--good); }
+  /* 내 프로필 — 점유율 카드 */
+  .sc.big { font-size:15px; font-weight:700; margin-top:4px; padding:4px; cursor:pointer; border-radius:6px; }
+  .sc.big .v { color:var(--acc); }
+  .sc.big:hover, .cat-row:hover { background:#1a1f29; }
+  .cat-row { cursor:pointer; padding:2px 4px; border-radius:5px; }
+  .cat-row .cat-t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:150px; }
+  .cat-detail { padding:2px 0 6px 10px; border-left:1px solid var(--line); margin:0 0 4px 5px; }
+  .me-node { color:var(--link); cursor:pointer; display:block; padding:1px 0;
+             overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   a.wl { color:var(--link); cursor:pointer; }
   .err { color:var(--stub); font-size:12px; }
   code { background:#0c0e13; padding:1px 5px; border-radius:4px; }
@@ -207,8 +216,10 @@
     <div class="empty">왼쪽에서 답을 고르거나, AI에게 질문해 새 노드를 만드세요.</div>
   </section>
 
-  <!-- RIGHT: scores + economy -->
+  <!-- RIGHT: my profile (territory share) + scores + economy -->
   <aside class="right">
+    <h2 class="sec">내 프로필 — 지식 영역 점유율</h2>
+    <div id="me-stats" class="prov">…</div>
     <h2 class="sec">권위 (내용 가치)</h2>
     <div id="top-nodes"></div>
     <h2 class="sec">허브 (안목)</h2>
@@ -284,7 +295,8 @@ async function refreshStat(){
     `노드 ${s.node_count} · 질의 ${s.query_count} · ${s.hub_mode} · ${store}${saved} · ${aiTag}`;
   el.title = [p.error || p.hint || (p.backend==='postgres' ? `Postgres 영속 · 마지막 저장 ${p.last_saved_at||'?'}` : ''),
               ai.hint].filter(Boolean).join('\n');
-  loadTree();   // 노드 생성·평가 등으로 상태가 바뀌면 트리도 갱신(노트 09)
+  loadTree();      // 노드 생성·평가 등으로 상태가 바뀌면 트리도 갱신(노트 09)
+  loadMeStats();   // 점유율도 갱신(노트 10 B)
 }
 
 function adoptBadge(n){
@@ -693,6 +705,48 @@ async function submitContrib(id, kind, body, btn, pane){
   }catch(e){ alert(e.message); }
 }
 
+// 내 프로필 — 지식 영역 점유율(노트 10 B). 숫자 클릭하면 내 노드 상세가 펼쳐진다.
+async function loadMeStats(){
+  let s;
+  try { s = await api('GET',`/api/me/stats?user=${encodeURIComponent(me())}&space=${space()}`); }
+  catch(e){ $('#me-stats').innerHTML = `<span class="err">${esc(e.message)}</span>`; return; }
+  const ov = s.overall;
+  const allMine = s.categories.flatMap(c => c.mine);
+  const nodeLinks = ms => ms.length
+    ? ms.map(m=>`<a class="me-node" data-oid="${esc(m.id)}" title="${esc(m.title)}">${esc(m.title)}</a>`).join('')
+    : '<span class="prov">내 노드 없음</span>';
+  const cats = s.categories.filter(c => c.total > 0).slice(0, 8).map(c => `
+    <div class="sc cat-row" data-cat="${esc(c.id)}">
+      <span class="cat-t">${esc(c.title)}</span>
+      <span class="v">${c.pct}% <span class="prov">(${c.authored}/${c.total})</span></span>
+    </div>
+    <div class="cat-detail" style="display:none">${nodeLinks(c.mine)}</div>`).join('');
+  const grp = s.group ? `
+    <div class="sc big" data-ov="grp"><span>그룹 «${esc(s.group.space)}» 점유율</span>
+      <span class="v">${s.group.pct}% <span class="prov">· 안목 ${s.group.hub}</span></span></div>` : '';
+  $('#me-stats').innerHTML = `
+    <div class="prov">나 <b>${esc(s.user)}</b> · 안목(허브) ${s.hub}</div>
+    <div class="sc big" data-ov="all"><span>전체 점유율</span>
+      <span class="v">${ov.pct}% <span class="prov">(${ov.authored}/${ov.total})</span></span></div>
+    <div class="cat-detail" data-detail="all" style="display:none">${nodeLinks(allMine)}</div>
+    <div class="prov" style="margin:8px 0 2px">영역(루트)별 · 영향력 권위 ${ov.authority} (${ov.authority_pct}%)</div>
+    ${cats || '<div class="prov">아직 없음</div>'}
+    ${grp}`;
+  // 클릭 → 상세 토글(다음 형제 .cat-detail). 전체는 data-detail="all"을 토글.
+  const box = $('#me-stats');
+  box.querySelectorAll('.cat-row').forEach(r => r.onclick = ()=>{
+    const d = r.nextElementSibling;
+    if (d && d.classList.contains('cat-detail'))
+      d.style.display = d.style.display==='none' ? 'block' : 'none';
+  });
+  const ovRow = box.querySelector('[data-ov="all"]');
+  if (ovRow) ovRow.onclick = ()=>{
+    const d = box.querySelector('[data-detail="all"]');
+    d.style.display = d.style.display==='none' ? 'block' : 'none';
+  };
+  box.querySelectorAll('.me-node').forEach(a => a.onclick = ()=> openNode(a.dataset.oid));
+}
+
 async function loadScores(){
   const s = await api('GET',`/api/scores?space=${space()}`);
   $('#top-nodes').innerHTML = s.top_nodes.length ? s.top_nodes.map(n =>
@@ -818,8 +872,9 @@ function updateLayerHint(){
   const sp = space();
   $('#layer-hint').textContent = sp==='public' ? '' : `· ${sp} 오버레이로 보는 중`;
 }
-function reloadAll(){ doSearch(); loadQueries(); loadScores(); loadLedger(); loadTree(); }
+function reloadAll(){ doSearch(); loadQueries(); loadScores(); loadLedger(); loadTree(); loadMeStats(); }
 $('#tree-refresh').onclick = loadTree;
+$('#me').onchange = ()=> { loadMeStats(); loadScores(); };   // 정체성 바꾸면 내 점유율 갱신
 
 // 좌측 탭 전환 (Windsurf식: 검색 / 위치)
 function showTab(name){
