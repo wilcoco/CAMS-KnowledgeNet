@@ -70,6 +70,12 @@
   .tkids { margin-left:7px; border-left:1px solid var(--line); padding-left:7px; }
   h2.sec { font-size:11px; color:var(--acc); text-transform:uppercase;
            letter-spacing:.5px; margin:16px 0 6px; }
+  /* 금융은 뒤로: '경제(고급)' 접기 헤더(흐리게) */
+  details.econ-adv > summary { cursor:pointer; list-style:none; font-size:11px;
+    color:var(--mut); text-transform:uppercase; letter-spacing:.5px; margin:16px 0 6px; }
+  details.econ-adv > summary::-webkit-details-marker { display:none; }
+  details.econ-adv > summary::before { content:"▸ "; }
+  details.econ-adv[open] > summary::before { content:"▾ "; }
   button { background:var(--acc); color:#0a0c10; border:0; border-radius:6px;
            padding:7px 11px; font-weight:600; cursor:pointer; }
   button.sec { background:#252a35; color:var(--fg); }
@@ -219,16 +225,17 @@
   <aside class="right">
     <h2 class="sec">내 프로필 — 지식 영역 점유율</h2>
     <div id="me-stats" class="prov">…</div>
-    <h2 class="sec">권위 (내용 가치)</h2>
+    <h2 class="sec">잘 밟힌 길 (권위)</h2>
     <div id="top-nodes"></div>
-    <h2 class="sec">허브 (안목)</h2>
+    <h2 class="sec">안목 — 앞서 알아본 사람</h2>
     <div id="top-hubs"></div>
-    <h2 class="sec">채택 평가자 (스테이크)</h2>
+    <h2 class="sec">단골 — 발자국 많이 남긴 사람</h2>
     <div id="top-evals"></div>
-    <h2 class="sec">포인트 경제</h2>
-    <div class="row"><input id="mint-amt" type="number" value="100" style="width:80px" />
-      <button id="btn-mint" class="sec">민팅</button></div>
-    <div id="ledger" class="prov" style="margin-top:8px"></div>
+    <details class="econ-adv"><summary>경제 (고급)</summary>
+      <div class="row" style="margin-top:6px"><input id="mint-amt" type="number" value="100" style="width:80px" />
+        <button id="btn-mint" class="sec">민팅</button></div>
+      <div id="ledger" class="prov" style="margin-top:8px"></div>
+    </details>
   </aside>
 </div>
 
@@ -307,8 +314,8 @@ async function refreshStat(){
 
 function adoptBadge(n){
   if (n.is_query || n.is_stub) return '';
-  return n.adopted ? '<span class="badge adopted">채택</span>'
-                   : '<span class="badge draft" title="아직 평가 안 됨 — 평가하면 채택됩니다">초안</span>';
+  return n.adopted ? '<span class="badge adopted" title="누군가 밟고 간 길 — 채택됨">채택</span>'
+                   : '<span class="badge draft" title="아직 아무도 안 밟음 — 발자국이 찍히면 채택">초안</span>';
 }
 function nodeItem(n){
   const b = (n.is_query ? '<span class="badge query">질의</span>'
@@ -317,7 +324,7 @@ function nodeItem(n){
   const d = document.createElement('div');
   d.className = 'item';
   d.innerHTML = `<div class="t">${esc(n.title)} ${b}</div>
-    <div class="m">${esc(n.author)} · 권위 ${n.authority} · 스테이크 ${n.staked}</div>`;
+    <div class="m">${esc(n.author)} · 👣 ${n.staked} · 권위 ${n.authority}</div>`;
   d.onclick = ()=> openNode(n.id);
   return d;
 }
@@ -507,10 +514,9 @@ function threadHTML(list){
     const canEval = (c.body && c.body.trim()) || c.frozen;
     const evalCtrl = canEval ? `
       <div class="row eval-row">
-        <input class="eval-amt" type="number" value="10" style="width:64px"/>
         <button class="sec eval-btn" data-eid="${esc(c.id)}"
-          title="이 답에 동의·스테이크하고 배당받기 (평가=저작)">평가</button>
-        <span class="prov eval-out">· 스테이크 ${c.staked}</span>
+          title="이 답이 도움됐어요 — 발자국을 남깁니다 (평가=저작)">👣 발자국</button>
+        <span class="prov eval-out">· 👣 ${c.staked}</span>
       </div>` : '';
     const grpBadge = c.space && c.space!=='public'
       ? ` <span class="badge" title="이 그룹에서만 보이는 사적 기여">${esc(c.space)}</span>` : '';
@@ -541,7 +547,7 @@ function coauthorsHTML(list){
   if (!list || !list.length) return '';
   const chips = list.map(a => {
     const role = a.role==='author' ? '원저자' : '평가자(저작)';
-    const stk = a.staked ? ` ·스테이크 ${a.staked}` : '';
+    const stk = a.staked ? ` · 👣 ${a.staked}` : '';
     return `<span class="badge co ${a.role}" title="안목 ${a.hub}${stk}">${esc(a.user)} · ${role}</span>`;
   }).join(' ');
   return `<div class="prov">저작: ${chips}</div>`;
@@ -558,10 +564,10 @@ function fillPane(n, c){
     <div class="q-answer"></div>` : '';
   const grp = space() !== 'public';        // 그룹 레이어면 평가 시맨틱이 다르다
   const endorse = (!n.is_query && !n.is_stub) ? `
-    <div class="row"><input class="end-amt" type="number" value="10" style="width:80px"/>
+    <div class="row">
       <button class="sec btn-endorse" title="${grp
-        ? `'${esc(space())}' 그룹 내부에서만 보이는 사적 평가 — 자유발행 그룹 코인, 공통 권위·잔액에 무영향`
-        : '공통 코인을 스테이크하고 배당받기 (평가=저작)'}">${grp ? `사적 평가 (${esc(space())} 코인)` : '평가 (스테이크+배당)'}</button>
+        ? `'${esc(space())}' 그룹 안에서만 보이는 발자국 (자유발행 그룹 코인)`
+        : '이 정리가 도움됐어요 — 발자국을 남깁니다 (평가=저작)'}">👣 ${grp ? `발자국 (${esc(space())})` : '발자국 남기기'}</button>
       <span class="prov end-out"></span></div>` : '';
   const stubFill = n.is_stub ? `
     <div class="row"><button class="btn-fill">🪄 AI로 이 개념 채우기</button>
@@ -575,7 +581,7 @@ function fillPane(n, c){
       ${adoptBadge(n)}
       ${n.space && n.space!=='public' ? `<span class="badge">${esc(n.space)}</span>` : ''}
     </div>
-    <div class="prov">${prov} · 권위 ${n.authority} · 스테이크 ${n.staked}</div>
+    <div class="prov">${prov} · 👣 ${n.staked} · 권위 ${n.authority}</div>
     ${coauthorsHTML(n.coauthors)}
     ${n.is_query ? '' : (n.is_stub
       ? `<div class="answer prov">아직 비어 있는 개념입니다 — 위키링크로 자리만 잡혔어요. 아래 버튼으로 AI 정리를 생성하세요.</div>`
@@ -613,12 +619,11 @@ function fillPane(n, c){
       const row = b.closest('.eval-row');
       const out = row.querySelector('.eval-out');
       try{
-        const r = await withBusy('평가 처리 중…',
+        const r = await withBusy('발자국 남기는 중…',
           ()=> api('POST','/api/endorse',
-            {account:me(), node_id:b.dataset.eid, amount:Number(row.querySelector('.eval-amt').value), space:space()}), b);
+            {account:me(), node_id:b.dataset.eid, amount:1, space:space()}), b);
         toast(r.balance===undefined
-          ? `사적 평가 완료 (${r.space}) · 그룹 권위 ${r.group_authority}`
-          : `평가 완료 · 잔액 ${r.balance} · 배당 ${JSON.stringify(r.payouts)}`);
+          ? `👣 발자국을 남겼어요 (${r.space})` : `👣 발자국을 남겼어요`);
         loadLedger(); loadScores(); refreshPane(c);
       }catch(e){ out.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
     });
@@ -657,12 +662,11 @@ function fillPane(n, c){
     c.querySelector('.btn-endorse').onclick = async (ev)=>{
       const out = c.querySelector('.end-out');
       try{
-        const r = await withBusy('평가 처리 중…',
+        const r = await withBusy('발자국 남기는 중…',
           ()=> api('POST','/api/endorse',
-            {account:me(), node_id:n.id, amount:Number(c.querySelector('.end-amt').value), space:space()}), ev.currentTarget);
+            {account:me(), node_id:n.id, amount:1, space:space()}), ev.currentTarget);
         toast(r.balance===undefined
-          ? `사적 평가 완료 (${r.space}) · 그룹 권위 ${r.group_authority}`
-          : `평가 완료 · 잔액 ${r.balance} · 배당 ${JSON.stringify(r.payouts)}`);
+          ? `👣 발자국을 남겼어요 (${r.space})` : `👣 발자국을 남겼어요`);
         loadLedger(); loadScores(); refreshPane(c);
       }catch(e){ out.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
     };
