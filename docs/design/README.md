@@ -21,6 +21,7 @@
 | [`11-llm-wiki-comparison.md`](11-llm-wiki-comparison.md) | **Karpathy "LLM Wiki" 대조.** 같은 공간 검증. 겹침(복리·위키링크·옵시디안·모순=fork) / 차별(커먼즈+경제+평가=저작+다인·자체IDE) / 흡수할 결핍(Ingest+raw층, Lint, log). 원문은 [`../refs/karpathy-llm-wiki.md`](../refs/karpathy-llm-wiki.md). |
 | [`12-alignment-complexity.md`](12-alignment-complexity.md) | **정렬 복잡도 — LLM Wiki의 벽과 우회(핵심 포지셔닝).** 전역 일관성 = 초선형(≈제곱) 정렬 비용. 우리는 쓰기시점 slug 주소화(O(1) dedup)+모순 공존(fork)+점증 랭킹+사람 샤딩으로 국소·점증·emergent화. 불변식 4개. |
 | [`13-footprint-economy.md`](13-footprint-economy.md) | **발자국 경제(초안).** 저자 영구 50% + 나머지 50%는 선행 발자국 지분 배당(선점=안목 보상). 가중치 w=f(L/M) track record, 규정타석 N>n 발동, 오목·clamp·정정환수 가드레일. 미정 knob: 무료/비용·f파라미터·저자감쇠. |
+| [`14-human-centered-grounding.md`](14-human-centered-grounding.md) | **사람 중심 · 근거와 종합(분기 숙고).** LLM Wiki=사람크롤러+AI저자 vs 우리=사람판단+AI횃불. 출처=근거/발자국=판단(직교). 지형 따라 라우팅, 종합=이견보존 지형도, 콜드스타트는 웹→내부RAG. 커먼즈-우선 유지·덜짓고 더굴리기. |
 | [`glossary.md`](glossary.md) | 핵심 용어집 (허브/권위/포크/잠복/색인재고/암묵지). |
 | [`lineage.md`](lineage.md) | 설계 진화 계보 (256 → 391 → 새 설계 → 통합 재귀). |
 
