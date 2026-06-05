@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import re
 import threading
@@ -1174,6 +1175,63 @@ def create_app() -> FastAPI:
                     {"user": u, "staked": round(s, 4)}
                     for u, s in sorted(evald.items(), key=lambda us: -us[1])[:10]
                 ],
+            }
+
+    @app.get("/api/integrity/probe")
+    def integrity_probe(k: int = 12, min_sim: float = 0.5, limit: int = 30):
+        """결탁 탐침 — 1단계: *관찰 전용*(게이팅 없음, 스키마 변경 없음).
+
+        발자국 데이터(`econ.staked`)만으로 **희소 노드 블로킹 + 캡 K**(노트 13)로
+        의심 쌍을 싸게 찾는다. 비용 ≈ O(K·F): 인기(참여자>k) 노드는 건너뛰고(IDF상
+        신호도 ~0), 희소 노드의 작은 참여자 집합 안에서만 IDF-가중 코사인을 누적.
+
+        반환은 *의심 쌍/군집*만 — 어떤 조치도 하지 않는다(탐침). 정확도는 데이터가
+        쌓이며 보정하고, 할인·검증·차단은 다음 단계.
+        """
+        from collections import defaultdict
+        from itertools import combinations
+
+        svc = get_service()
+        with svc.reading():
+            staked = svc.econ.staked
+            # 노드별 발자국 참여자 집합
+            foot = {slug: set(a for a, amt in accts.items() if amt > 0)
+                    for slug, accts in staked.items()}
+            foot = {s: a for s, a in foot.items() if len(a) >= 2}
+            users = set().union(*foot.values()) if foot else set()
+            U = max(len(users), 1)
+            # 희소 노드만(2 ≤ 참여자 ≤ k) — 인기 노드는 스킵
+            rare = {s: a for s, a in foot.items() if len(a) <= k}
+            w = {s: math.log(1 + U / len(a)) for s, a in rare.items()}  # IDF 가중
+
+            norm = defaultdict(float)
+            for s, a in rare.items():
+                for u in a:
+                    norm[u] += w[s] ** 2
+            dot = defaultdict(float)
+            shared = defaultdict(list)
+            for s, a in rare.items():
+                for u, v in combinations(sorted(a), 2):
+                    dot[(u, v)] += w[s] ** 2
+                    shared[(u, v)].append(s)
+
+            pairs = []
+            for (u, v), d in dot.items():
+                denom = math.sqrt(norm[u] * norm[v]) or 1.0
+                sim = d / denom
+                if sim >= min_sim:
+                    pairs.append({
+                        "a": u, "b": v, "sim": round(sim, 3),
+                        "shared": shared[(u, v)][:8],
+                        "n_shared": len(shared[(u, v)]),
+                    })
+            pairs.sort(key=lambda p: -p["sim"])
+            return {
+                "stage": "probe (observe-only, no gating)",
+                "params": {"k": k, "min_sim": min_sim},
+                "users": U, "rare_nodes": len(rare),
+                "candidate_pairs": len(dot), "suspicious": len(pairs),
+                "pairs": pairs[:limit],
             }
 
     @app.get("/api/me/stats")
