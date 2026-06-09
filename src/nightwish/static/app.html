@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>업무 지식 정리</title>
+<title>같이 키우는 답 — 묻고, 가려내고, 물려준다</title>
 <style>
   :root { --bg:#0f1115; --panel:#171a21; --line:#2a2f3a; --fg:#e6e8ee;
           --mut:#9aa3b2; --acc:#7aa2ff; --good:#5ad19a; --warn:#ffcf6b;
@@ -70,6 +70,18 @@
   .tkids { margin-left:7px; border-left:1px solid var(--line); padding-left:7px; }
   h2.sec { font-size:11px; color:var(--acc); text-transform:uppercase;
            letter-spacing:.5px; margin:16px 0 6px; }
+  /* 4겹 섹션(노트 15): 보강/다른답/후속을 종류별로 — 수가 곧 '살아있는 답'의 증거 */
+  details.kn-sec { margin-top:10px; }
+  details.kn-sec > summary { cursor:pointer; list-style:none; font-size:12px; color:var(--acc);
+    padding:5px 0; border-top:1px solid var(--line); }
+  details.kn-sec > summary::-webkit-details-marker { display:none; }
+  details.kn-sec > summary::before { content:"▸ "; color:var(--mut); }
+  details.kn-sec[open] > summary::before { content:"▾ "; }
+  .draft-hint { color:var(--warn); margin-top:8px; }
+  .actbar.main { border-top:1px solid var(--line); padding-top:10px; margin-top:12px; }
+  /* 온보딩(빈 화면 = 내 호기심으로 채우기) */
+  .onboard h2 { font-size:17px; margin-bottom:8px; }
+  .onboard p { max-width:560px; margin:8px auto; line-height:1.7; }
   /* 금융은 뒤로: '경제(고급)' 접기 헤더(흐리게) */
   details.econ-adv > summary { cursor:pointer; list-style:none; font-size:11px;
     color:var(--mut); text-transform:uppercase; letter-spacing:.5px; margin:16px 0 6px; }
@@ -170,11 +182,13 @@
   <div class="prov" id="sel-hint"></div>
 </div>
 <header>
-  <h1>업무 지식 정리</h1>
+  <h1>같이 키우는 답</h1>
+  <span class="m" style="color:var(--mut)">묻고 · 가려내고 · 물려준다</span>
   <span class="stat" id="stat">…</span>
   <span class="spacer"></span>
-  <label class="m">레이어</label>
-  <select id="space" title="보는 층 (공용 commons + 그룹 오버레이)">
+  <button class="sec" id="btn-invite" title="동료를 초대해 함께 가려내기 — 지금 보는 공간의 링크를 복사합니다">👥 초대</button>
+  <label class="m">공간</label>
+  <select id="space" title="함께 보는 공간 — public(모두의 공용) 또는 우리 그룹만의 층">
     <option value="public">public (공용)</option>
   </select>
   <input id="space-new" placeholder="그룹 id 추가" style="width:110px" />
@@ -216,20 +230,20 @@
     </div>
   </aside>
 
-  <!-- CENTER: node detail + recursive thread -->
+  <!-- CENTER: node detail + recursive thread (빈 상태 = 온보딩, init()이 채움) -->
   <section class="center" id="center">
-    <div class="empty">왼쪽에서 답을 고르거나, AI에게 질문해 새 노드를 만드세요.</div>
+    <div class="empty">…</div>
   </section>
 
   <!-- RIGHT: my profile (territory share) + scores + economy -->
   <aside class="right">
-    <h2 class="sec">내 프로필 — 지식 영역 점유율</h2>
+    <h2 class="sec" title="내가 만들거나 가려낸 지식이 전체에서 차지하는 몫">내 프로필 — 지식 영역 점유율</h2>
     <div id="me-stats" class="prov">…</div>
-    <h2 class="sec">잘 밟힌 길 (권위)</h2>
+    <h2 class="sec" title="많이 *그리고 두루* 밟힌(👣 발자국 받은) 답이 위로 — 내용 가치 점수">잘 밟힌 길 (권위)</h2>
     <div id="top-nodes"></div>
-    <h2 class="sec">안목 — 앞서 알아본 사람</h2>
+    <h2 class="sec" title="남보다 먼저 좋은 답을 알아본 사람 — 그 답이 나중에 두루 인정받으면 오릅니다">안목 — 앞서 알아본 사람</h2>
     <div id="top-hubs"></div>
-    <h2 class="sec">단골 — 발자국 많이 남긴 사람</h2>
+    <h2 class="sec" title="발자국(👣 도움됐다는 표시)을 많이 남기며 가려내기에 참여한 사람">단골 — 발자국 많이 남긴 사람</h2>
     <div id="top-evals"></div>
     <details class="econ-adv"><summary>경제 (고급)</summary>
       <div class="row" style="margin-top:6px"><input id="mint-amt" type="number" value="100" style="width:80px" />
@@ -346,6 +360,18 @@ async function doAsk(force){
       $('#btn-ask'));
     await refreshStat();
     renderNode(r.node);                 // 새 AI 답 또는 기존 채택본
+    // 첫 질문 직후 한 번만: 혼자 두지 않기 — 동료 초대 넛지 (교정 3)
+    if (!localStorage.getItem('nw_invite_nudged')){
+      localStorage.setItem('nw_invite_nudged', '1');
+      const b = document.createElement('div');
+      b.className = 'prov';
+      b.innerHTML = '🤖 AI의 초안이 깔렸습니다. 동료가 보면 고치고 보탤 수 있어요 — ';
+      const ib = document.createElement('button');
+      ib.className = 'sec'; ib.textContent = '👥 초대 링크 복사';
+      ib.onclick = doInvite;
+      b.appendChild(ib);
+      if (panes().firstChild) panes().firstChild.prepend(b);
+    }
     if (r.stage === 'existing'){        // 같은 질문의 채택본이 이미 있음 — 난립 방지
       const banner = document.createElement('div');
       banner.className = 'prov';
@@ -425,9 +451,42 @@ function refreshAllPanes(){ [...panes().children].forEach(p => p.dataset.nodeId 
 function closePane(pane){               // close this pane and everything to its right
   const i = paneIndexOf(pane);
   while (panes().children.length > i){ panes().lastChild.remove(); trail.pop(); }
-  if (!panes().children.length)         // 전부 닫히면 빈 안내
-    panes().innerHTML = '<div class="empty">왼쪽에서 답을 고르거나, AI에게 질문해 새 노드를 만드세요.</div>';
+  if (!panes().children.length) showOnboard();   // 전부 닫히면 온보딩으로
   else focusPane(panes().lastChild);
+}
+
+// -- 온보딩: 빈 화면을 남의 씨앗이 아니라 *내 호기심*으로 채운다 (교정 1+3) -----
+function showOnboard(){
+  trail = [];
+  panes().innerHTML = `<div class="empty onboard">
+    <h2>혼자 AI와 대화하면 그 답은 증발합니다. 여기서는 남습니다.</h2>
+    <p>물으면 AI가 초안을 깔고 — 당신과 동료의 <b>판단(👣) · 보강 · 정정</b>이 그것을
+       <b>믿을 수 있는 답</b>으로 만듭니다. 다음 사람은 그 길을 <b>공짜로</b> 다시 씁니다.</p>
+    <div class="row" style="justify-content:center">
+      <input id="onboard-q" placeholder="지금 궁금한 것을 그대로 적어보세요" style="width:62%"/>
+      <button id="onboard-go">🤖 첫 질문하기</button>
+    </div>
+    <p class="prov">① 먼저 검색 — 이미 닦인 길이 있으면 공짜로 읽기 · ② 없으면 AI에게 — 내 첫 길 내기 · ③ 👥 동료 초대 — 함께 가려내기</p>
+  </div>`;
+  const go = ()=>{ const q = $('#onboard-q').value.trim(); if (!q) return;
+    $('#search').value = q; doAsk(); };
+  $('#onboard-go').onclick = go;
+  $('#onboard-q').addEventListener('keydown', e=>{
+    if (e.key==='Enter'){ e.preventDefault(); go(); } });
+}
+
+// 초대 — 지금 보는 공간(레이어)의 링크를 복사 (소그룹 점화의 최소 동선)
+function inviteURL(){
+  const sp = space();
+  return location.origin + location.pathname
+       + (sp==='public' ? '' : `?space=${encodeURIComponent(sp)}`);
+}
+async function doInvite(){
+  try { await navigator.clipboard.writeText(inviteURL()); }
+  catch(e){ prompt('초대 링크를 복사하세요:', inviteURL()); }
+  toast(space()==='public'
+    ? '👥 초대 링크 복사됨 — 동료와 함께 묻고 가려내세요'
+    : `👥 초대 링크 복사됨 — '${space()}' 공간을 함께 봅니다`);
 }
 
 // -- LEFT: knowledge tree explorer (노트 09) ---------------------------------
@@ -542,6 +601,26 @@ function actbar(id){
   </div>`;
 }
 
+// 4겹 전면화(노트 15): 스레드를 종류별 섹션으로 — 기여(보강)·대안(다른 답)·후속질문.
+// 최상위만 분류하고, 깊은 재귀(가지 안의 가지)는 각 항목 안에서 threadHTML 그대로.
+function sectionsHTML(thread){
+  const list = (thread || []).filter(c => c.kind !== 'follow');
+  const comments = list.filter(c => c.kind === 'comment');
+  const forks    = list.filter(c => c.kind === 'fork');
+  const quests   = list.filter(c => c.kind === 'contribute' && c.title);
+  const rest     = list.filter(c =>
+    !comments.includes(c) && !forks.includes(c) && !quests.includes(c));
+  const sec = (items, icon, label, hint, open) => !items.length ? '' : `
+    <details class="kn-sec"${open ? ' open' : ''}>
+      <summary>${icon} ${label} <b>${items.length}</b> <span class="prov">— ${hint}</span></summary>
+      ${threadHTML(items)}
+    </details>`;
+  return sec(comments, '📚', '보강', '사람들이 키운 것', true)
+       + sec(forks,    '⚖️', '다른 답·정정', '견줄 것', false)
+       + sec(quests,   '❓', '후속질문', '더 파고든 곳', true)
+       + (rest.length ? threadHTML(rest) : '');
+}
+
 // 평가 = 저작: 원저자 + 평가로 이 지식을 자기 것으로 인정한 사람들
 function coauthorsHTML(list){
   if (!list || !list.length) return '';
@@ -563,15 +642,18 @@ function fillPane(n, c){
       <button class="sec q-human">사람이 답하기</button></div>
     <div class="q-answer"></div>` : '';
   const grp = space() !== 'public';        // 그룹 레이어면 평가 시맨틱이 다르다
+  // ① 판단(가려냄): 발자국 버튼 — 아래 '함께 만들기' 바에서 기여 버튼들과 한 줄
   const endorse = (!n.is_query && !n.is_stub) ? `
-    <div class="row">
       <button class="sec btn-endorse" title="${grp
         ? `'${esc(space())}' 그룹 안에서만 보이는 발자국 (자유발행 그룹 코인)`
-        : '이 정리가 도움됐어요 — 발자국을 남깁니다 (평가=저작)'}">👣 ${grp ? `발자국 (${esc(space())})` : '발자국 남기기'}</button>
-      <span class="prov end-out"></span></div>` : '';
+        : '이 답이 도움됐어요/맞아요 — 발자국을 남겨 가려냅니다 (평가=저작)'}">👣 도움됐어요</button>
+      <span class="prov end-out"></span>` : '';
   const stubFill = n.is_stub ? `
     <div class="row"><button class="btn-fill">🪄 AI로 이 개념 채우기</button>
       <span class="prov fill-out"></span></div>` : '';
+  // AI 초안인데 아직 아무도 안 가려냄 → 첫 판단을 청함
+  const draftHint = (n.frozen && !n.adopted && !n.is_query && !n.is_stub) ? `
+    <div class="prov draft-hint">🤖 AI 초안 — 아직 아무도 가려내지 않았어요. 읽고 맞다면 👣로 첫 판단자가 되어주세요. 아니면 정정을.</div>` : '';
   c.innerHTML = `
     <button class="pane-close" title="이 패널(과 오른쪽)을 닫기">×</button>
     <div class="node-head">
@@ -586,18 +668,22 @@ function fillPane(n, c){
     ${n.is_query ? '' : (n.is_stub
       ? `<div class="answer prov">아직 비어 있는 개념입니다 — 위키링크로 자리만 잡혔어요. 아래 버튼으로 AI 정리를 생성하세요.</div>`
       : `<div class="answer">${renderText(n.answer)}</div>`)}
-    ${queryAnswer}${endorse}${stubFill}
+    ${queryAnswer}${stubFill}${draftHint}
     ${n.outlinks && n.outlinks.length ? `<div class="prov">연결: ${
       n.outlinks.map(o=>`<a class="ol" data-oid="${esc(o.id)}">${esc(o.title)}</a>`).join(', ')
     }</div>`:''}
     ${n.backlinks && n.backlinks.length ? `<div class="prov">백링크: ${
       n.backlinks.map(b=>`<a class="wl" data-link="${esc(b.title)}">${esc(b.title)}</a>`).join(', ')
     }</div>`:''}
-    <div class="prov" style="margin-top:4px">💡 본문 어디든 드래그하면 그 주제가 오른쪽에 열려요 — 읽거나, 더 물어 가지치기. 링크도 오른쪽으로 펼쳐집니다.</div>
-    <h2 class="sec">스레드 — 이 슬롯에 무엇이든 재귀로 붙습니다</h2>
-    ${actbar(n.id)}
-    <div class="reply" data-rid="${esc(n.id)}"></div>
-    ${threadHTML(n.thread || [])}`;
+    <div class="prov" style="margin-top:4px">💡 본문 어디든 드래그하면 그 주제가 오른쪽에 열려요 — 읽거나, 더 물어 가지치기.</div>
+    ${sectionsHTML(n.thread)}
+    <div class="actbar main">
+      ${endorse}
+      <button class="sec" data-act="comment" data-id="${esc(n.id)}">+ 보강</button>
+      <button class="sec" data-act="fork" data-id="${esc(n.id)}">+ 정정/다른 답</button>
+      <button class="sec" data-act="followup" data-id="${esc(n.id)}">+ 후속질문</button>
+    </div>
+    <div class="reply" data-rid="${esc(n.id)}"></div>`;
 
   c.querySelector('.pane-close').onclick = ()=> closePane(c);
 
@@ -852,7 +938,7 @@ $('#btn-reset').onclick = async ()=>{
   try {
     await withBusy('전체 삭제 중…',
       ()=> api('POST','/api/admin/reset?confirm=DELETE-ALL'), $('#btn-reset'));
-    panes().innerHTML = '<div class="empty">전체 삭제됨. 새 질문을 시작하세요.</div>'; trail = [];
+    showOnboard();
     await refreshStat(); reloadAll();
   } catch(e){ alert('삭제 실패: ' + e.message); }
 };
@@ -891,7 +977,18 @@ function showTab(name){
   }
 }
 document.querySelectorAll('.tab').forEach(t => t.onclick = ()=> showTab(t.dataset.tab));
+$('#btn-invite').onclick = doInvite;
 (async function init(){
+  // 초대 링크(?space=그룹)로 들어오면 그 공간으로 합류 (교정 3)
+  const sp = new URLSearchParams(location.search).get('space');
+  if (sp && sp !== 'public'){
+    if (![...$('#space').options].some(o => o.value === sp)){
+      const o = document.createElement('option'); o.value = o.textContent = sp;
+      $('#space').appendChild(o);
+    }
+    $('#space').value = sp;
+  }
+  showOnboard();
   await refreshStat(); reloadAll(); updateLayerHint();
 })();
 </script>
