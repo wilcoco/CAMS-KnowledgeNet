@@ -673,3 +673,32 @@ def test_semantic_relation_confirm_and_roundtrip(client):
     svc = unified.get_service()
     restored = OntologyTree.from_json(svc.tree.to_json())
     assert restored.nodes[nid].link_rels[tgt]["전제"] == ["a", "b"]
+
+
+def test_synthesize_grounds_on_existing_answers(client):
+    """노트 10 A: '종합해서 답변할까요?' — 내부 RAG.
+
+    합성 답은 기존 답들을 근거로 만들어지고, 출처가 [[위키링크]]로 결정적으로
+    박혀 자동 연결된다(모델이 인용을 빠뜨려도). 근거가 없으면 404 — 맨바닥
+    합성은 하지 않는다(미션: 근거 없는 생성 금지).
+    """
+    # 빈 커먼즈에선 종합 불가 — 404
+    assert client.post("/api/synthesize",
+                       json={"question": "용접 변형", "author": "x"}
+                       ).status_code == 404
+
+    a = client.post("/api/ask", json={"question": "용접 변형 줄이는 법",
+                                      "author": "a"}).json()["node"]
+    b = client.post("/api/ask", json={"question": "용접 열 관리 원칙",
+                                      "author": "b"}).json()["node"]
+
+    r = client.post("/api/synthesize",
+                    json={"question": "용접 변형", "author": "c"})
+    assert r.status_code == 200, r.text
+    node, sources = r.json()["node"], r.json()["sources"]
+    src_ids = {s["id"] for s in sources}
+    assert {a["id"], b["id"]} & src_ids            # 기존 답이 근거로 쓰임
+    assert node["frozen"]                           # AI 합성 = 동결 초안
+    assert "근거" in node["answer"]                 # 출처 섹션이 박힘
+    # 출처가 위키링크로 자동 연결 — links에 근거 노드 slug 포함
+    assert set(node["links"]) & src_ids

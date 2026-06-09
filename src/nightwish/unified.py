@@ -416,6 +416,12 @@ class RelateBody(BaseModel):
     author: str = "anon"
 
 
+class SynthBody(BaseModel):
+    question: str = Field(min_length=1)
+    author: str = Field(min_length=1)
+    space: str = "public"
+
+
 class QueryBody(BaseModel):
     title: str = Field(min_length=1)
     detail: str = ""
@@ -880,6 +886,47 @@ def create_app() -> FastAPI:
                 del svc.tree.nodes[nid]
             svc.tree.add_root(nid, body.title, body.body, body.author)
             return _node_view(svc, nid, body.space, full=True)
+
+    @app.post("/api/synthesize")
+    def synthesize(body: SynthBody):
+        """검색 리스트 밑 "위 내용을 종합해서 답변할까요?" — 내부 RAG (노트 10 A).
+
+        커먼즈에서 검색(권위 재정렬)된 *기존* Q&A들을 근거로 답 1개를 합성한다.
+        근거 *안의 내용만* 쓰고, 출처는 [[위키링크]]로 본문에 박혀 자동 연결된다
+        (자동 구조화의 절반). 새 지식 생성이 아니라 기존 길들의 교차로 — 그래서
+        프런티어 모델이 필요 없는 싼 작업이고, 미션(중복 생성 억제)과 정합.
+        """
+        svc = get_service()
+        with svc.reading():
+            cands = [n for n in svc.tree.search(body.question, body.space)[:8]
+                     if n.is_answer and not n.is_stub]
+            # 사람이 가려낸(발자국 받은) 답 우선 — 평가가 근거의 자격
+            cands.sort(key=lambda n: -sum(svc.econ.staked_on(n.id).values()))
+            sources = cands[:5]
+            if not sources:
+                raise HTTPException(
+                    404, "종합할 기존 답이 없습니다 — 먼저 AI에게 질문해 첫 길을 내세요")
+            src_texts = [
+                f"[{i}] {s.question}\n{svc.tree.resolved_answer(s.id).strip()[:700]}"
+                for i, s in enumerate(sources, 1)
+            ]
+            titles = [s.question for s in sources]
+        # 합성(느린 호출)은 락 밖 — 근거 안에서만, 모자라면 모자란다고 말하게.
+        prompt = ("아래는 이 커먼즈에서 사람들이 만들고 평가한 기존 Q&A들이다. "
+                  "**이 근거 안의 내용만으로** 질문에 답을 종합하라. 근거에 없는 "
+                  "내용은 지어내지 말고, 모자란 부분은 '근거 부족'이라고 밝혀라. "
+                  "주장 뒤에 [[제목]] 형식으로 출처를 표기하라.\n\n"
+                  + "\n\n".join(src_texts))
+        text = _ask_ai(body.question, prompt)
+        # 출처를 결정적으로 박는다 — 모델이 인용을 빠뜨려도 위키링크 자동 연결 보장
+        text = (text.rstrip() + "\n\n— 📚 근거 (기존 답):\n"
+                + "\n".join(f"- [[{t}]]" for t in titles))
+        with svc.writing():
+            nid = svc._new_id(body.question)
+            svc.tree.add_root(nid, body.question, text, body.author)
+            svc.tree.mark_answered(nid, _ai_model)
+            return {"node": _node_view(svc, nid, body.space, full=True),
+                    "sources": [{"id": s.id, "title": s.question} for s in sources]}
 
     @app.post("/api/nodes/{node_id}/contribute")
     def contribute(node_id: str, body: ContribBody):

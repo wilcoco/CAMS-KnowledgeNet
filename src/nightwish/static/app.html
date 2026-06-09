@@ -355,6 +355,28 @@ async function doSearch(){
   const box = $('#results'); box.innerHTML = '';
   if (!res.length) box.innerHTML = '<div class="prov">검색 결과 없음 — AI에게 질문해보세요.</div>';
   res.forEach(n => box.appendChild(nodeItem(n)));
+  // 기존 길이 2개 이상이면 — "종합해서 답변할까요?" (내부 RAG: 근거 안에서만, 출처 자동 링크)
+  if (q && res.length >= 2){
+    const offer = document.createElement('div');
+    offer.className = 'prov';
+    offer.style.marginTop = '8px';
+    offer.textContent = `위 ${res.length}개의 기존 답을 종합해서 답변할까요?`;
+    const go = document.createElement('button');
+    go.className = 'sec'; go.style.marginLeft = '6px';
+    go.textContent = '📋 종합 답변 만들기';
+    go.title = '기존 답들만 근거로 종합(RAG) — 근거에 없는 내용은 지어내지 않고, 출처는 본문 [[링크]]로 박힙니다';
+    go.onclick = async ()=>{
+      try{
+        const r = await withBusy('기존 답들을 종합하는 중…',
+          ()=> api('POST','/api/synthesize',{question:q, author:me(), space:space()}), go);
+        await refreshStat();
+        renderNode(r.node);
+        toast(`📚 기존 답 ${r.sources.length}개를 근거로 종합 — 출처는 본문 링크로`);
+      }catch(e){ alert('종합 실패: ' + e.message); }
+    };
+    offer.appendChild(go);
+    box.appendChild(offer);
+  }
 }
 
 async function doAsk(force){
