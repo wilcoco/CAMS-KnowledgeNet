@@ -63,7 +63,25 @@ QAQA 한 줄: **"AI를 소비 → AI를 *키우는* 플랫폼"**, Notion급 편�
 
 ---
 
-## Nightwish가 참조할 후보 (커밋 아님, 검토용)
+## 문서 C — 관계 시스템 (relationship-system.md / architecture.md, 직접 fetch)
+
+> 출처: `QAQA/doc/relationship-system.md`, `doc/architecture.md` (raw.githubusercontent 경유).
+> 스택: Next.js+Prisma+PostgreSQL(pgvector), Claude Sonnet + OpenAI 임베딩(1536d), 모델 22개.
+
+**4계층 관계 체계:**
+- **L0 메시지 담화관계(7)** — AI 응답에서 `[[REL:{simple:"명확화"}]]` 태그로 추출:
+  명확화/더깊게/근거/검증/반박/적용/정리 (+ relationStance: 수용/중립/도전).
+- **L1 NodeRelation(13)** — 담화 7(RST/Toulmin) + **구조 6(SKOS/온톨로지):
+  generalization·specialization·analogy·cause_effect·prerequisite·extension.**
+  auto-linker가 코사인 ≥0.65로 자동 생성.
+- **L2 TopicCluster** — centroid 임베딩, 배정 임계 ≥0.70, 합성요약·갭 추적.
+- **L3 ClusterRelation(SKOS 4)** — broader(상위)/narrower(하위)/related(관련)/conflicting(대립).
+  L1→L3 매핑표 존재(예: counterargument→conflicting).
+
+**스스로 인정한 한계:** "현재 정규식 파싱은 불안정 — tool_use 전환 권장."
+관계가 *AI 태그 + 코사인 자동생성*이라 **사람 판단 층이 없음**(우리 노트14와의 차이).
+
+
 
 - **합성 뷰(0.4)** — 노트 12가 "공짜로 안 준다"던 *단일 요약*을 *파생·캐시 뷰*로 지불하는
   방식. 논쟁중=fork, 지식갭=열린질의에 매핑. (전역 일관성 유지 없이.)
