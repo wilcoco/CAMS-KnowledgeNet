@@ -21,7 +21,7 @@
 | [`10-navigation-session.md`](10-navigation-session.md) | **내비게이션 세션 — 결정·로드맵·미결(살아있는 문서).** 이 세션 규칙·기획 보존. RAG 미배선 발견, 워크스트림 A(보강 RAG)·B(개인 대시보드/내보내기)·C(내비), 열린 결정. |
 | [`11-llm-wiki-comparison.md`](11-llm-wiki-comparison.md) | **Karpathy "LLM Wiki" 대조.** 같은 공간 검증. 겹침(복리·위키링크·옵시디안·모순=fork) / 차별(커먼즈+경제+평가=저작+다인·자체IDE) / 흡수할 결핍(Ingest+raw층, Lint, log). 원문은 [`../refs/karpathy-llm-wiki.md`](../refs/karpathy-llm-wiki.md). |
 | [`12-alignment-complexity.md`](12-alignment-complexity.md) | **정렬 복잡도 — LLM Wiki의 벽과 우회(핵심 포지셔닝).** 전역 일관성 = 초선형(≈제곱) 정렬 비용. 우리는 쓰기시점 slug 주소화(O(1) dedup)+모순 공존(fork)+점증 랭킹+사람 샤딩으로 국소·점증·emergent화. 불변식 4개. |
-| [`13-footprint-economy.md`](13-footprint-economy.md) | **발자국 경제(초안).** 저자 영구 50% + 나머지 50%는 선행 발자국 지분 배당(선점=안목 보상). 가중치 w=f(L/M) track record, 규정타석 N>n 발동, 오목·clamp·정정환수 가드레일. 미정 knob: 무료/비용·f파라미터·저자감쇠. |
+| [`13-footprint-economy.md`](13-footprint-economy.md) | **발자국 경제(v2 — 특허 기반 확정).** 코어=KR 256/391의 순서가중 허브/권위(수학식10·청구항3 상속). 이중 평판 통화(저자=권위/발자국자=허브)로 50% 분할·f(L/M)·무료/비용 knob 해소. 우리 확장=두루·규정타석·정정환수. 잔여: 자동 자기발자국·mode 결정. |
 | [`14-human-centered-grounding.md`](14-human-centered-grounding.md) | **사람 중심 · 근거와 종합(분기 숙고).** LLM Wiki=사람크롤러+AI저자 vs 우리=사람판단+AI횃불. 출처=근거/발자국=판단(직교). 지형 따라 라우팅, 종합=이견보존 지형도, 콜드스타트는 웹→내부RAG. 커먼즈-우선 유지·덜짓고 더굴리기. |
 | [`15-alignment.md`](15-alignment.md) | **정렬: 재사용 위에 사람(수렴점).** 가장 싼 답(재사용)을 사람이 키우고(기여)·가려내고(판단)·견준다(대안). 비용 사다리(재사용<생성)+사람 4겹(AI 0)·네 겹 이미 구현. D1 효율(검증·상품화)/D2 참여(해자)/D3 집단(emergent). 점화=소그룹. |
 | [`16-semantic-relations.md`](16-semantic-relations.md) | **시멘틱 릴레이션 — 판단되는 링크 타입.** 담화관계는 불채택(행위가 이미 관계), 구조관계만 4+1(관련 기본/상위/하위/전제/대립). 자동확정 배척 — 칩 탭=확인 누적, 경쟁 타입 공존(QAQA 대조). |
