@@ -410,6 +410,12 @@ class ContribBody(BaseModel):
     anchor: str = ""
 
 
+class RelateBody(BaseModel):
+    target: str = Field(min_length=1)   # link slug on the source node
+    rel: str = Field(min_length=1)      # one of OntologyTree.REL_TYPES
+    author: str = "anon"
+
+
 class QueryBody(BaseModel):
     title: str = Field(min_length=1)
     detail: str = ""
@@ -519,10 +525,20 @@ def _node_view(svc: UnifiedService, node_id: str, space: str, *, full: bool = Fa
             {"id": b.id, "title": b.question} for b in t.backlinks(n.id, space)
         ]
         view["outlinks"] = [
-            {"id": s, "title": t.nodes[s].question}
+            {"id": s, "title": t.nodes[s].question, **_rel_view(n, s)}
             for s in n.links if s in t.nodes and t._visible(t.nodes[s], space)
         ]
     return view
+
+
+def _rel_view(n, target: str) -> dict:
+    """Top-confirmed relation type for a link (노트 16) — '' = 무라벨(관련)."""
+    rels = n.link_rels.get(target) or {}
+    if not rels:
+        return {"rel": "", "rel_n": 0, "rels": {}}
+    top, users = max(rels.items(), key=lambda kv: (len(kv[1]), kv[0]))
+    return {"rel": top, "rel_n": len(users),
+            "rels": {t: len(u) for t, u in rels.items()}}
 
 
 def _thread(svc: UnifiedService, node_id: str, space: str) -> list[dict]:
@@ -745,10 +761,10 @@ def create_app() -> FastAPI:
                         shown.add(ch.id)
                 return out, shown
 
-            def ref_leaf(n) -> dict:
+            def ref_leaf(n, rel: str = "") -> dict:
                 return {
                     "id": n.id, "title": label_of(n), "kind": kind_of(n),
-                    "anchor": n.anchor, "via": "link",
+                    "anchor": n.anchor, "via": "link", "rel": rel,
                     "authority": round(t.authority_in(n.id, space), 4),
                     "children": [],
                 }
@@ -763,7 +779,7 @@ def create_app() -> FastAPI:
                         if (tgt is None or s in shown or not t._visible(tgt, space)
                                 or tgt.is_stub):
                             continue
-                        kids.append(ref_leaf(tgt))
+                        kids.append(ref_leaf(tgt, _rel_view(n, s)["rel"]))
                         shown.add(s)
                 return {
                     "id": n.id, "title": label_of(n), "kind": kind_of(n),
@@ -1002,6 +1018,22 @@ def create_app() -> FastAPI:
                 "source": _node_view(svc, node_id, body.space, full=True),
                 "target": _node_view(svc, target_slug, body.space, full=True),
             }
+
+    @app.post("/api/nodes/{node_id}/relate")
+    def relate(node_id: str, body: RelateBody):
+        """링크에 시멘틱 릴레이션 타입을 *확인*한다 (노트 16).
+
+        자동 확정 없음 — 사람이 칩을 탭할 때마다 확인자가 쌓이고, 가장 많이
+        확인된 타입이 앞에 선다(경쟁 타입은 공존). 기본 링크는 무라벨(관련).
+        """
+        svc = get_service()
+        with svc.writing():
+            try:
+                rels = svc.tree.relate(node_id, body.target, body.rel, body.author)
+            except OntologyError as e:
+                raise HTTPException(400, str(e))
+            return {"node": node_id, "target": body.target,
+                    "rels": {t: len(u) for t, u in rels.items()}}
 
     @app.post("/api/classify")
     def classify(body: ClassifyBody):
@@ -1387,11 +1419,13 @@ def create_app() -> FastAPI:
                 fm.append("source: Nightwish")
                 fm.append("---\n")
                 parts = ["\n".join(fm), f"# {n.question}\n", t.resolved_answer(n.id).strip(), ""]
-                links = [t.nodes[s].question for s in n.links
-                         if s in t.nodes]
+                links = [(t.nodes[s].question, _rel_view(n, s)["rel"])
+                         for s in n.links if s in t.nodes]
                 if links:
                     parts.append("\n## 연결")
-                    parts.append("\n".join(f"- [[{lt}]]" for lt in links))
+                    parts.append("\n".join(
+                        f"- [[{lt}]]" + (f" ({rel})" if rel else "")
+                        for lt, rel in links))
                 thread = thread_md(n.id)
                 if thread.strip():
                     parts.append("\n## 토론")

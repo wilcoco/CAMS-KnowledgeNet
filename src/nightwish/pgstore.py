@@ -56,6 +56,7 @@ def snapshot_to_rows(snap: dict) -> dict[str, list[dict]]:
             "model": n.get("model", ""), "answered_at": n.get("answered_at", ""),
             "created_at": int(n.get("created_at", 0)), "updated_at": int(n.get("updated_at", 0)),
             "ord": ordn, "anchor": n.get("anchor", ""),
+            "link_rels": json.dumps(n.get("link_rels") or {}, ensure_ascii=False),
         })
         for i, target in enumerate(n.get("links", [])):
             link_rows.append({"node_id": n["id"], "ord": i, "target": target})
@@ -130,6 +131,7 @@ def rows_to_snapshot(tables: dict[str, list[dict]]) -> dict:
             "answered_at": r.get("answered_at", ""), "space": r.get("space", "public"),
             "updated_at": int(r.get("updated_at", 0)), "last_editor": r.get("last_editor", ""),
             "anchor": r.get("anchor", ""),
+            "link_rels": json.loads(r.get("link_rels") or "{}"),
         })
 
     linkers: dict[str, list[tuple[int, str]]] = {}
@@ -177,9 +179,10 @@ _DDL = [
         author text, last_editor text, action text, status text, space text,
         parent_id text, stake double precision, value_add boolean,
         frozen boolean, model text, answered_at text,
-        created_at bigint, updated_at bigint, ord bigint, anchor text)""",
+        created_at bigint, updated_at bigint, ord bigint, anchor text, link_rels text)""",
     # migration: add columns to a pre-existing node table (idempotent)
     "ALTER TABLE node ADD COLUMN IF NOT EXISTS anchor text",
+    "ALTER TABLE node ADD COLUMN IF NOT EXISTS link_rels text",
     "CREATE INDEX IF NOT EXISTS node_author_idx ON node(author)",
     "CREATE INDEX IF NOT EXISTS node_space_idx ON node(space)",
     "CREATE INDEX IF NOT EXISTS node_parent_idx ON node(parent_id)",
@@ -199,7 +202,7 @@ _DDL = [
 _COLS = {
     "node": ["id", "slug", "question", "answer", "author", "last_editor", "action",
              "status", "space", "parent_id", "stake", "value_add", "frozen", "model",
-             "answered_at", "created_at", "updated_at", "ord", "anchor"],
+             "answered_at", "created_at", "updated_at", "ord", "anchor", "link_rels"],
     "node_link": ["node_id", "ord", "target"],
     "linker": ["node_id", "ord", "evaluator"],
     "node_authority": ["node_id", "value"],

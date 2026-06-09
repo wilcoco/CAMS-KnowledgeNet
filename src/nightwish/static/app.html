@@ -66,6 +66,12 @@
      사람 기여(보강/정정/후속)는 알맹이라 밝게 둔다. */
   .trow.ref .tlabel { color:var(--mut); }
   .trow.ref .tlabel::before { content:"→ "; color:var(--link); }
+  /* 시멘틱 릴레이션 칩(노트 16) — 무라벨(관련)은 흐리게, 타입 확인되면 또렷하게 */
+  .rel-chip { font-size:10px; border:1px solid var(--line); border-radius:8px;
+              padding:0 5px; margin-left:3px; color:var(--mut); cursor:pointer; }
+  .rel-chip.set { color:var(--acc); border-color:var(--acc); }
+  .rel-pop { position:fixed; z-index:80; background:var(--panel);
+             border:1px solid var(--line); border-radius:8px; padding:5px; display:flex; gap:4px; }
   /* each level steps in with its own guide rail */
   .tkids { margin-left:7px; border-left:1px solid var(--line); padding-left:7px; }
   h2.sec { font-size:11px; color:var(--acc); text-transform:uppercase;
@@ -518,7 +524,8 @@ function treeRowHTML(n, depth){
   const kindCls = n.kind==='contribute' ? (n.title ? 'followup' : '') : n.kind;
   const kindLabel = n.via==='link' ? '' : (kindMap[kindCls] || '');
   const ref = n.via==='link' ? ' ref' : '';
-  const label = (n.kind==='unfold' && n.anchor) ? `«${esc(n.anchor)}»` : esc(n.title);
+  const label = (n.kind==='unfold' && n.anchor) ? `«${esc(n.anchor)}»`
+    : (n.via==='link' && n.rel ? `<span class="tkind">${esc(n.rel)}</span>` : '') + esc(n.title);
   const cur = n.id===curNodeId ? ' cur' : '';
   return `<div class="tnode${depth===0?' root':''}">
     <div class="trow${cur}${ref}" data-id="${esc(n.id)}" data-kids="${kids?1:0}">
@@ -670,7 +677,11 @@ function fillPane(n, c){
       : `<div class="answer">${renderText(n.answer)}</div>`)}
     ${queryAnswer}${stubFill}${draftHint}
     ${n.outlinks && n.outlinks.length ? `<div class="prov">연결: ${
-      n.outlinks.map(o=>`<a class="ol" data-oid="${esc(o.id)}">${esc(o.title)}</a>`).join(', ')
+      n.outlinks.map(o=>`<span class="olw"><a class="ol" data-oid="${esc(o.id)}">${esc(o.title)}</a><a
+        class="rel-chip${o.rel?' set':''}" data-target="${esc(o.id)}"
+        title="관계 타입 — 탭해서 확인 (확인한 사람이 많을수록 그 타입이 신뢰를 얻습니다)${
+          o.rels && Object.keys(o.rels).length ? ' · ' + Object.entries(o.rels).map(([t,k])=>t+'×'+k).join(' ') : ''}"
+        >${o.rel ? esc(o.rel)+(o.rel_n>1?'×'+o.rel_n:'') : '관련'}</a></span>`).join(', ')
     }</div>`:''}
     ${n.backlinks && n.backlinks.length ? `<div class="prov">백링크: ${
       n.backlinks.map(b=>`<a class="wl" data-link="${esc(b.title)}">${esc(b.title)}</a>`).join(', ')
@@ -692,6 +703,30 @@ function fillPane(n, c){
   const linkMap = {};
   (n.outlinks||[]).concat(n.backlinks||[]).forEach(o => { if (o.id) linkMap[o.title] = o.id; });
   c.querySelectorAll('.ol').forEach(a => a.onclick = ()=> pushPane(a.dataset.oid, c));
+  // 시멘틱 릴레이션 칩(노트 16): 탭 → 타입 4개 팝오버 → 확인(사람이 채택, 자동 없음)
+  c.querySelectorAll('.rel-chip').forEach(ch => ch.onclick = (ev)=>{
+    ev.stopPropagation();
+    document.querySelectorAll('.rel-pop').forEach(p=>p.remove());
+    const pop = document.createElement('div'); pop.className = 'rel-pop';
+    ['상위','하위','전제','대립'].forEach(rt=>{
+      const b = document.createElement('button'); b.className='sec'; b.textContent = rt;
+      b.title = {상위:'대상이 이 개념의 일반화/포함', 하위:'대상이 이 개념의 구체화/사례',
+                 전제:'대상을 먼저 알아야 함', 대립:'대상과 충돌·반례'}[rt];
+      b.onclick = async ()=>{ pop.remove();
+        try{
+          await api('POST', `/api/nodes/${encodeURIComponent(n.id)}/relate`,
+            {target: ch.dataset.target, rel: rt, author: me()});
+          toast(`관계 확인: ${rt} — 확인이 쌓일수록 신뢰가 붙습니다`);
+          refreshPane(c);
+        }catch(e){ alert('관계 확인 실패: ' + e.message); }
+      };
+      pop.appendChild(b);
+    });
+    const r = ch.getBoundingClientRect();
+    pop.style.left = r.left + 'px'; pop.style.top = (r.bottom + 4) + 'px';
+    document.body.appendChild(pop);
+    setTimeout(()=> document.addEventListener('click', ()=> pop.remove(), {once:true}));
+  });
   c.querySelectorAll('a.wl').forEach(a => a.onclick = ()=> {
     const id = linkMap[a.dataset.link];
     if (id) pushPane(id, c);

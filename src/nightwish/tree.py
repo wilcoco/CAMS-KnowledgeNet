@@ -136,6 +136,10 @@ class Node:
     #: ``""`` = a normal commons/thread node; non-empty = an in-context unfold,
     #: rendered inline at its quoted span rather than in the flat thread.
     anchor: str = ""
+    #: semantic relations (노트 16) — typed annotations *over* ``links``.
+    #: ``{target_slug: {rel_type: [confirming users…]}}``. A bare link stays
+    #: unlabeled (=관련, zero friction); a type earns trust as people confirm it.
+    link_rels: dict[str, dict[str, list[str]]] = field(default_factory=dict)
 
     @property
     def is_unfold(self) -> bool:
@@ -633,6 +637,29 @@ class OntologyTree:
         self._finalize(node)
         return node
 
+    #: semantic relation types over links (노트 16). The bare/default link is
+    #: unlabeled ("관련") and is *not* stored — only opt-in types are.
+    REL_TYPES = ("상위", "하위", "전제", "대립")
+
+    def relate(self, node_id: str, target: str, rel: str, user: str) -> dict:
+        """Confirm a typed relation on an existing link (노트 16).
+
+        People-centred: a type is never auto-fixed — it accumulates *confirmers*
+        (같은 타입을 여러 명이 확인할수록 신뢰). Competing types coexist and the
+        most-confirmed one leads, mirroring fork-coexistence on nodes (노트 12).
+        """
+        node = self._require(node_id)
+        if rel not in self.REL_TYPES:
+            raise OntologyError(
+                f"unknown relation type {rel!r} — one of {self.REL_TYPES}")
+        if target not in node.links:
+            raise OntologyError(f"{target!r} is not linked from {node_id!r}")
+        users = node.link_rels.setdefault(target, {}).setdefault(rel, [])
+        if user not in users:
+            users.append(user)
+        node.updated_at = self._tick()
+        return {t: list(u) for t, u in node.link_rels[target].items()}
+
     # -- layers (public commons + group overlays) -----------------------------
     @staticmethod
     def _visible(node: Node, space: str | None) -> bool:
@@ -793,6 +820,8 @@ class OntologyTree:
             "frozen": n.frozen, "model": n.model, "answered_at": n.answered_at,
             "space": n.space, "updated_at": n.updated_at,
             "last_editor": n.last_editor, "anchor": n.anchor,
+            "link_rels": {k: {t: list(u) for t, u in r.items()}
+                          for k, r in n.link_rels.items()},
         }
 
     @staticmethod
@@ -808,6 +837,8 @@ class OntologyTree:
             model=d.get("model", ""), answered_at=d.get("answered_at", ""),
             space=d.get("space", "public"), updated_at=d.get("updated_at", 0),
             last_editor=d.get("last_editor", ""), anchor=d.get("anchor", ""),
+            link_rels={k: {t: list(u) for t, u in (r or {}).items()}
+                       for k, r in d.get("link_rels", {}).items()},
         )
 
     @classmethod

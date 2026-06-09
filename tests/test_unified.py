@@ -632,3 +632,44 @@ def test_two_instances_sharing_a_db_do_not_clobber(monkeypatch):
         unified.reset_service(a)
         assert client.get(f"/api/nodes/{nid_b}").status_code == 200   # A sees B's too
     unified.reset_service(None)
+
+
+def test_semantic_relation_confirm_and_roundtrip(client):
+    """노트 16: 링크 타입은 사람 확인이 쌓여 신뢰를 얻는다 (자동 확정 없음).
+
+    expand로 생긴 링크에 relate를 누적 — 다수 확인 타입이 뷰의 top(rel)으로,
+    경쟁 타입은 rels에 공존. 직렬화 라운드트립에서 확인자 목록이 보존된다.
+    """
+    nid = client.post("/api/ask", json={"question": "합의 구조", "author": "t"}
+                      ).json()["node"]["id"]
+    client.post(f"/api/nodes/{nid}/expand",
+                json={"question": "정족수 규칙", "author": "t"})
+    ols = client.get(f"/api/nodes/{nid}").json()["outlinks"]
+    tgt = [o for o in ols if o["title"] == "정족수 규칙"][0]["id"]
+
+    for user, rel in [("a", "전제"), ("b", "전제"), ("c", "대립")]:
+        r = client.post(f"/api/nodes/{nid}/relate",
+                        json={"target": tgt, "rel": rel, "author": user})
+        assert r.status_code == 200, r.text
+    # 같은 사람이 또 확인해도 중복 적립 없음
+    client.post(f"/api/nodes/{nid}/relate",
+                json={"target": tgt, "rel": "전제", "author": "a"})
+
+    ol = [o for o in client.get(f"/api/nodes/{nid}").json()["outlinks"]
+          if o["id"] == tgt][0]
+    assert ol["rel"] == "전제" and ol["rel_n"] == 2
+    assert ol["rels"] == {"전제": 2, "대립": 1}
+
+    # 잘못된 타입/링크는 400
+    assert client.post(f"/api/nodes/{nid}/relate",
+                       json={"target": tgt, "rel": "엉뚱", "author": "x"}
+                       ).status_code == 400
+    assert client.post(f"/api/nodes/{nid}/relate",
+                       json={"target": "no-such-link", "rel": "전제", "author": "x"}
+                       ).status_code == 400
+
+    # 스냅샷 라운드트립 — 확인자 목록 보존
+    from nightwish.tree import OntologyTree
+    svc = unified.get_service()
+    restored = OntologyTree.from_json(svc.tree.to_json())
+    assert restored.nodes[nid].link_rels[tgt]["전제"] == ["a", "b"]
