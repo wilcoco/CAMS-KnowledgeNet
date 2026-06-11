@@ -661,7 +661,20 @@ function footprintLine(n){
     : s<3  ? `👣 ${s} · 갓 난 길`
     : s<12 ? `👣 ${s} · 다져지는 길`
     :        `👣 ${s} 🔥 두루 밟힌 길`;
-  return `<span title="👣 = '도움됐다'고 밟은 사람 수. 많이 *그리고 두루*(서로 다른 사람) 밟힐수록 믿을 만한 길이 됩니다 — 권위는 그렇게 쌓인 신뢰.">${wear} · 권위 ${n.authority}</span>`;
+  // 두루(독립 출처): 같은 무리는 √n 표 — 권위가 '수'가 아니라 '다양성'으로 선다(노트 17)
+  const indep = (n.walkers||0) >= 2
+    ? ` · 두루 ${n.indep}${n.indep < n.walkers ? `<span class="m">/${n.walkers}</span>` : '명'}` : '';
+  return `<span title="👣 = '도움됐다'고 밟은 사람 수 · 두루 = 그중 *서로 독립인* 유효 수(한 무리는 √n표). 많이 그리고 두루 밟힐수록 권위가 섭니다.">${wear}${indep} · 권위 ${n.authority}</span>`;
+}
+
+// n번째 발견자(노트 17 §3): 발자국 순서가 곧 자산 — 내가 이 길을 몇 번째로 알아봤나
+function discovererLine(n){
+  const order = n.walk_order || [];
+  const i = order.indexOf(me());
+  if (i < 0) return '';
+  const after = order.length - i - 1;
+  return `<div class="prov" style="color:var(--acc)">👁 당신은 이 길의 <b>${i+1}번째 발견자</b>${
+    after > 0 ? ` — 그 후 ${after}명이 따라 걸었습니다` : ' — 아직 당신뿐, 맞다면 안목이 증명됩니다'}</div>`;
 }
 
 // 평가 = 저작: 원저자 + 평가로 이 지식을 자기 것으로 인정한 사람들
@@ -709,6 +722,7 @@ function fillPane(n, c){
       ${n.space && n.space!=='public' ? `<span class="badge">${esc(n.space)}</span>` : ''}
     </div>
     <div class="prov">${prov} · ${footprintLine(n)}</div>
+    ${discovererLine(n)}
     ${coauthorsHTML(n.coauthors)}
     ${n.is_query ? '' : (n.is_stub
       ? `<div class="answer prov">아직 비어 있는 개념입니다 — 위키링크로 자리만 잡혔어요. 아래 버튼으로 AI 정리를 생성하세요.</div>`
@@ -883,6 +897,14 @@ async function loadMeStats(){
   const grp = s.group ? `
     <div class="sc big" data-ov="grp"><span>그룹 «${esc(s.group.space)}» 점유율</span>
       <span class="v">${s.group.pct}% <span class="prov">· 안목 ${s.group.hub}</span></span></div>` : '';
+  // 👁 안목의 길들(노트 17 §3): 내가 먼저 밟고, 뒤에 따라온 길 — 검증의 순간을 보여줌
+  const fs = s.foresight || [];
+  const fsHTML = fs.length ? `
+    <div class="prov" style="margin:10px 0 2px" title="내가 일찍 밟은 길을 그 후 몇 명이 따라 걸었나 — 따라온 사람이 늘수록 내 안목(허브)이 쌓입니다">👁 내 안목 — 먼저 밟고, 뒤에 따라온 길</div>
+    ${fs.filter(f=>f.after>0).slice(0,5).map(f=>`
+      <div class="sc"><a class="me-node" data-oid="${esc(f.id)}" title="${esc(f.title)}">${esc(f.title)}</a>
+        <span class="v" title="내가 ${f.pos}번째, 그 후 ${f.after}명">${f.pos}번째 · +${f.after}명</span></div>`).join('')
+    || '<div class="prov">아직 따라온 사람 없음 — 밟아둔 길이 자라면 여기 보입니다</div>'}` : '';
   $('#me-stats').innerHTML = `
     <div class="prov">나 <b>${esc(s.user)}</b> · 안목(허브) ${s.hub}</div>
     <div class="sc big" data-ov="all"><span>전체 점유율</span>
@@ -891,9 +913,23 @@ async function loadMeStats(){
     <div class="prov" style="margin:8px 0 2px">영역(루트)별 · 영향력 권위 ${ov.authority} (${ov.authority_pct}%)</div>
     ${cats || '<div class="prov">아직 없음</div>'}
     ${grp}
+    ${fsHTML}
     <div class="row" style="margin-top:8px">
       <button class="sec" id="export-mine" title="내가 정리한 노드를 옵시디안 볼트(zip)로 — [[위키링크]] 그대로">⬇ 옵시디안으로 내보내기</button>
     </div>`;
+  // 검증 이벤트(노트 17 §3): 지난 방문 이후 내 이른 발자국 뒤로 따라온 사람이 늘면 알림.
+  // 첫 방문은 기준선만 저장(조용히) — 보상 발명이 아니라 이미 일어난 결과의 가시화.
+  try{
+    const key = 'nw_fs_' + me();
+    const seen = JSON.parse(localStorage.getItem(key) || '{}');
+    const grown = fs.filter(f => seen[f.id] !== undefined && f.after > seen[f.id]);
+    if (grown.length){
+      const top = grown[0];
+      toast(`👁 당신이 ${top.pos}번째로 밟은 '${top.title.slice(0,20)}'${grown.length>1?` 외 ${grown.length-1}곳`:''}을 그 후 다른 사람들이 따라 걸었습니다 — 안목이 쌓였어요`, 6000);
+    }
+    fs.forEach(f => seen[f.id] = f.after);
+    localStorage.setItem(key, JSON.stringify(seen));
+  }catch(e){}
   // 클릭 → 상세 토글(다음 형제 .cat-detail). 전체는 data-detail="all"을 토글.
   const box = $('#me-stats');
   box.querySelectorAll('.cat-row').forEach(r => r.onclick = ()=>{

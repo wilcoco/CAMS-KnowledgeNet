@@ -522,9 +522,15 @@ def _node_view(svc: UnifiedService, node_id: str, space: str, *, full: bool = Fa
         "staked": round(sum(svc.econ.staked_on(n.id).values()), 4),
         "coauthors": _coauthors(svc, n.id),
     }
+    # 두루(노트 17 §5): 원시 발자국 사람 수 vs 유효 독립 수 — UI '두루 N명'의 근거
+    raw_w, eff_w = t.effective_walkers(n.id)
+    view["walkers"] = raw_w
+    view["indep"] = round(eff_w, 1)
     # 채택 = 사람이 평가(스테이크)한 답. 평가 전 AI 초안은 검색엔 보이되 '초안'으로 표시.
     view["adopted"] = view["staked"] > 0
     if full:
+        # 발견 순서(노트 17 §3 'n번째 발견자') — 순서가 곧 자산임을 보드처럼
+        view["walk_order"] = t.scoring.link_order(n.id)[:50]
         view["thread"] = _thread(svc, n.id, space)
         view["unfolds"] = _unfolds(svc, n.id, space)
         view["backlinks"] = [
@@ -1378,6 +1384,26 @@ def create_app() -> FastAPI:
                 "hub": round(t.scoring.hub_of(user), 4),
                 "categories": cats,
             }
+            # 안목의 길들(노트 17 §3 검증 이벤트): 내가 밟은 뒤 남들이 따라온 길.
+            # pos=내가 몇 번째였나, after=그 뒤 따라온 사람 수 — 프런트가 이 수의
+            # 증가를 감지해 "당신 안목이 맞았다"를 알린다.
+            foresight = []
+            for fid, order in t.scoring._linkers.items():
+                if user not in order:
+                    continue
+                fn = t.nodes.get(fid)
+                if fn is None or fn.is_stub or not t._visible(fn, space):
+                    continue
+                pos = order.index(user) + 1
+                after = len(order) - pos
+                foresight.append({
+                    "id": fid, "title": fn.question or "(답)", "pos": pos,
+                    "after": after,
+                    "authority": round(t.authority_in(fid, space), 4),
+                })
+            foresight.sort(key=lambda f: (-f["after"], f["pos"]))
+            out["foresight"] = foresight[:8]
+            out["walked"] = len(foresight)
             if t._is_group(space):
                 ghub = t.scoring.hub_of(user)
                 if space in t.group_scoring:

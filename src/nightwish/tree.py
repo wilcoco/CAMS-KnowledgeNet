@@ -48,6 +48,7 @@ filling, not just a top-level question. Nodes additionally carry wiki concerns:
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from enum import Enum
@@ -186,6 +187,8 @@ class OntologyTree:
     _rev: int = field(default=0, compare=False, repr=False)
     #: space -> (rev, ranked[(node, authority)]) memo of the authority scoreboard
     _board_cache: dict = field(default_factory=dict, compare=False, repr=False)
+    #: (rev, {user→cluster root}) memo of walker collusion clusters (노트 17 §5)
+    _div_cache: tuple | None = field(default=None, compare=False, repr=False)
 
     # -- internals -------------------------------------------------------------
     def _tick(self) -> int:
@@ -684,7 +687,9 @@ class OntologyTree:
 
     def authority_in(self, node_id: str, space: str | None = None) -> float:
         """Authority a viewer in ``space`` sees: public commons **prior** plus,
-        for a group viewer, that group's own private endorse **overlay**.
+        for a group viewer, that group's own private endorse **overlay** — then
+        scaled by the **diversity factor** (두루, 노트 17 §5): *많이*가 아니라
+        *두루* 밟힌 길이 위로 가도록, 한 무리는 √n 표로 접힌다.
 
         One-way: the public commons authority never includes any group's coin, so
         a public viewer (``space`` public/None) sees only the shared value, while a
@@ -693,7 +698,88 @@ class OntologyTree:
         base = self.scoring.authority_of(node_id)
         if self._is_group(space) and space in self.group_scoring:
             base += self.group_scoring[space].authority_of(node_id)
-        return base
+        return base * self.diversity_factor(node_id)
+
+    # -- 두루(diversity) — 결탁 묶음을 √n 표로 접는 읽기시점 렌즈 (노트 17 §5) ----
+    #: 참여자 > cap 인 인기 노드는 겹침 신호에서 제외 (IDF≈0 — 자연스러운 합의)
+    DIVERSITY_POPULAR_CAP = 12
+    #: 희소 노드를 *2개 이상* 같이 밟아야 같은 무리 후보 (1개 겹침 = 동일 관심사)
+    DIVERSITY_MIN_SHARED = 2
+    #: IDF-가중 코사인 임계 — 이 이상 겹치면 같은 무리로 묶음
+    DIVERSITY_MIN_SIM = 0.5
+
+    def _walker_clusters(self) -> dict[str, str]:
+        """user → 무리 대표(union-find root). 탐침과 같은 휴리스틱의 메모판.
+
+        *전역 상관*만 본다: 희소 노드(참여 ≤ cap)를 2개 이상 같이, IDF-코사인
+        ≥ 임계로 밟은 쌍만 묶는다 — 인기 노드 위의 합의·단일 공동관심은 무죄.
+        쓰기 revision 단위 메모 → 읽기 폭주는 O(1), 재계산은 O(K·F).
+        """
+        if self._div_cache is not None and self._div_cache[0] == self._rev:
+            return self._div_cache[1]
+        from collections import defaultdict
+        from itertools import combinations
+
+        foot = {nid: set(v) for nid, v in self.scoring._linkers.items()
+                if len(set(v)) >= 2}
+        users = set().union(*foot.values()) if foot else set()
+        total = max(len(users), 1)
+        rare = {nid: w for nid, w in foot.items()
+                if len(w) <= self.DIVERSITY_POPULAR_CAP}
+        idf = {nid: math.log(1 + total / len(w)) for nid, w in rare.items()}
+        norm: dict[str, float] = defaultdict(float)
+        dot: dict[tuple[str, str], float] = defaultdict(float)
+        shared: dict[tuple[str, str], int] = defaultdict(int)
+        for nid, w in rare.items():
+            for u in w:
+                norm[u] += idf[nid] ** 2
+            for a, b in combinations(sorted(w), 2):
+                dot[(a, b)] += idf[nid] ** 2
+                shared[(a, b)] += 1
+
+        parent: dict[str, str] = {}
+
+        def find(x: str) -> str:
+            parent.setdefault(x, x)
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        for (a, b), d in dot.items():
+            if shared[(a, b)] < self.DIVERSITY_MIN_SHARED:
+                continue
+            denom = math.sqrt(norm[a] * norm[b]) or 1.0
+            if d / denom >= self.DIVERSITY_MIN_SIM:
+                ra, rb = find(a), find(b)
+                if ra != rb:
+                    parent[ra] = rb
+        clusters = {u: find(u) for u in parent}
+        self._div_cache = (self._rev, clusters)
+        return clusters
+
+    def effective_walkers(self, node_id: str) -> tuple[int, float]:
+        """(원시 발자국 사람 수, 유효 독립 수) — 같은 무리는 √n 표.
+
+        독립 5명 = 5표, 한 패거리 5명 = √5 ≈ 2.2표. "많이 그리고 *두루*"의
+        '두루'를 수로 만든 것 — UI의 '두루 N명'과 검증 이벤트가 이 수를 쓴다.
+        """
+        order = self.scoring._linkers.get(node_id) or []
+        walkers = list(dict.fromkeys(order))
+        if not walkers:
+            return 0, 0.0
+        clusters = self._walker_clusters()
+        groups: dict[str, int] = {}
+        for u in walkers:
+            key = clusters.get(u, f"~{u}")        # 무소속 = 자기 혼자 1표
+            groups[key] = groups.get(key, 0) + 1
+        eff = sum(math.sqrt(c) for c in groups.values())
+        return len(walkers), eff
+
+    def diversity_factor(self, node_id: str) -> float:
+        """authority_in에 곱하는 두루 보정 — 발자국이 없으면 1(무영향)."""
+        raw, eff = self.effective_walkers(node_id)
+        return (eff / raw) if raw else 1.0
 
     def group_endorse(
         self, space: str, evaluator: str, node_id: str, *, weight: float = 1.0
