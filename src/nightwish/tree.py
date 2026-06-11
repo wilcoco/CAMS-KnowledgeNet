@@ -703,10 +703,13 @@ class OntologyTree:
     # -- 두루(diversity) — 결탁 묶음을 √n 표로 접는 읽기시점 렌즈 (노트 17 §5) ----
     #: 참여자 > cap 인 인기 노드는 겹침 신호에서 제외 (IDF≈0 — 자연스러운 합의)
     DIVERSITY_POPULAR_CAP = 12
-    #: 희소 노드를 *2개 이상* 같이 밟아야 같은 무리 후보 (1개 겹침 = 동일 관심사)
-    DIVERSITY_MIN_SHARED = 2
-    #: IDF-가중 코사인 임계 — 이 이상 겹치면 같은 무리로 묶음
-    DIVERSITY_MIN_SIM = 0.5
+    #: 희소 노드를 *3개 이상* 같이 밟아야 같은 무리 후보. 시뮬(2026-06)에서 2개는
+    #: 유기 사용자·진짜 팀까지 연쇄로 접는 거대 오탐을 만들었다(결정로그) — 유행
+    #: 따라 같은 두 글을 밟는 건 정상, *세 곳 이상 동행*이 결탁 신호.
+    DIVERSITY_MIN_SHARED = 3
+    #: IDF-가중 코사인 임계 — 취향이 절반쯤 겹치는 큐레이터(≈0.5)는 무죄,
+    #: 프로필이 거의 같은 무리(≥0.6)만 묶는다 (시뮬 보정).
+    DIVERSITY_MIN_SIM = 0.6
 
     def _walker_clusters(self) -> dict[str, str]:
         """user → 무리 대표(union-find root). 탐침과 같은 휴리스틱의 메모판.

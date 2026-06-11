@@ -1249,7 +1249,11 @@ def create_app() -> FastAPI:
             return {
                 "mode": t.scoring.mode,
                 "top_nodes": [
-                    {"id": n.id, "title": n.question, "author": n.author,
+                    # 답만 있는 노드(정정/후속 답)는 question이 비어 있음 → 스니펫 폴백
+                    {"id": n.id,
+                     "title": n.question.strip()
+                              or (n.answer or "").strip().replace("\n", " ")[:30],
+                     "author": n.author,
                      "authority": round(a, 4)}
                     for n, a in ranked[:10] if a > 0
                 ],
