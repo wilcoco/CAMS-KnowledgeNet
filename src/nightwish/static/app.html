@@ -343,8 +343,9 @@ function nodeItem(n){
           + ' ' + adoptBadge(n);
   const d = document.createElement('div');
   d.className = 'item';
+  const wear = (n.staked||0) >= 12 ? '🔥' : (n.staked||0) >= 3 ? '' : (n.staked ? '' : '🌱');
   d.innerHTML = `<div class="t">${esc(n.title)} ${b}</div>
-    <div class="m">${esc(n.author)} · 👣 ${n.staked} · 권위 ${n.authority}</div>`;
+    <div class="m">${esc(n.author)} · 👣 ${n.staked}${wear?' '+wear:''} · 권위 ${n.authority}</div>`;
   d.onclick = ()=> openNode(n.id);
   return d;
 }
@@ -490,6 +491,8 @@ function showOnboard(){
     <h2>혼자 AI와 대화하면 그 답은 증발합니다. 여기서는 남습니다.</h2>
     <p>물으면 AI가 초안을 깔고 — 당신과 동료의 <b>판단(👣) · 보강 · 정정</b>이 그것을
        <b>믿을 수 있는 답</b>으로 만듭니다. 다음 사람은 그 길을 <b>공짜로</b> 다시 씁니다.</p>
+    <p class="prov">👣 <b>발자국</b> = "이 답이 맞다/도움됐다"는 한 번의 표시. 눈밭의 길처럼 —
+       <b>많이 *그리고 두루*</b> 밟힌 답일수록 위로 올라가고, 그 길을 <b>먼저 알아본 사람의 안목</b>도 함께 쌓입니다.</p>
     <div class="row" style="justify-content:center">
       <input id="onboard-q" placeholder="지금 궁금한 것을 그대로 적어보세요" style="width:62%"/>
       <button id="onboard-go">🤖 첫 질문하기</button>
@@ -603,7 +606,7 @@ function threadHTML(list){
     const evalCtrl = canEval ? `
       <div class="row eval-row">
         <button class="sec eval-btn" data-eid="${esc(c.id)}"
-          title="이 답이 도움됐어요 — 발자국을 남깁니다 (평가=저작)">👣 발자국</button>
+          title="이 가지가 맞다/도움됐다면 한 번 밟으세요 — 두루 밟힐수록 위로 (평가=저작)">👣 나도 밟기</button>
         <span class="prov eval-out">· 👣 ${c.staked}</span>
       </div>` : '';
     const grpBadge = c.space && c.space!=='public'
@@ -650,6 +653,17 @@ function sectionsHTML(thread){
        + (rest.length ? threadHTML(rest) : '');
 }
 
+// 발자국 메타포어를 살린 한 줄(노트 13): 길의 '닳음' = 얼마나 두루 밟혔나.
+// 👣 = 도움됐다 표시 수, 권위 = 그게 쌓인 신뢰. 발자국이 적으면 '갓 낸 길'.
+function footprintLine(n){
+  const s = n.staked || 0;
+  const wear = s===0 ? '🌱 아직 아무도 안 밟은 길'
+    : s<3  ? `👣 ${s} · 갓 난 길`
+    : s<12 ? `👣 ${s} · 다져지는 길`
+    :        `👣 ${s} 🔥 두루 밟힌 길`;
+  return `<span title="👣 = '도움됐다'고 밟은 사람 수. 많이 *그리고 두루*(서로 다른 사람) 밟힐수록 믿을 만한 길이 됩니다 — 권위는 그렇게 쌓인 신뢰.">${wear} · 권위 ${n.authority}</span>`;
+}
+
 // 평가 = 저작: 원저자 + 평가로 이 지식을 자기 것으로 인정한 사람들
 function coauthorsHTML(list){
   if (!list || !list.length) return '';
@@ -671,11 +685,13 @@ function fillPane(n, c){
       <button class="sec q-human">사람이 답하기</button></div>
     <div class="q-answer"></div>` : '';
   const grp = space() !== 'public';        // 그룹 레이어면 평가 시맨틱이 다르다
-  // ① 판단(가려냄): 발자국 버튼 — 아래 '함께 만들기' 바에서 기여 버튼들과 한 줄
+  // ① 판단(가려냄): 발자국 버튼 — 한 번 밟는 게 곧 '이 길이 맞다'는 표시.
+  const endorseTip = grp
+    ? `'${esc(space())}' 그룹 안에서만 남는 발자국 — 우리끼리 길을 다집니다`
+    : '이 답이 맞다/도움됐다면 한 번 밟으세요. 당신 발자국이 이 길을 남에게 추천하고, '
+      + '나중에 두루 인정받으면 *먼저 알아본 당신의 안목*도 함께 쌓입니다 (특허 허브).';
   const endorse = (!n.is_query && !n.is_stub) ? `
-      <button class="sec btn-endorse" title="${grp
-        ? `'${esc(space())}' 그룹 안에서만 보이는 발자국 (자유발행 그룹 코인)`
-        : '이 답이 도움됐어요/맞아요 — 발자국을 남겨 가려냅니다 (평가=저작)'}">👣 도움됐어요</button>
+      <button class="sec btn-endorse" title="${endorseTip}">👣 나도 밟기</button>
       <span class="prov end-out"></span>` : '';
   const stubFill = n.is_stub ? `
     <div class="row"><button class="btn-fill">🪄 AI로 이 개념 채우기</button>
@@ -692,7 +708,7 @@ function fillPane(n, c){
       ${adoptBadge(n)}
       ${n.space && n.space!=='public' ? `<span class="badge">${esc(n.space)}</span>` : ''}
     </div>
-    <div class="prov">${prov} · 👣 ${n.staked} · 권위 ${n.authority}</div>
+    <div class="prov">${prov} · ${footprintLine(n)}</div>
     ${coauthorsHTML(n.coauthors)}
     ${n.is_query ? '' : (n.is_stub
       ? `<div class="answer prov">아직 비어 있는 개념입니다 — 위키링크로 자리만 잡혔어요. 아래 버튼으로 AI 정리를 생성하세요.</div>`
@@ -805,11 +821,14 @@ function fillPane(n, c){
     c.querySelector('.btn-endorse').onclick = async (ev)=>{
       const out = c.querySelector('.end-out');
       try{
-        const r = await withBusy('발자국 남기는 중…',
+        const first = !n.staked;   // 첫 발자국이면 길이 '채택'으로 살아남
+        const r = await withBusy('길을 밟는 중…',
           ()=> api('POST','/api/endorse',
             {account:me(), node_id:n.id, amount:1, space:space()}), ev.currentTarget);
         toast(r.balance===undefined
-          ? `👣 발자국을 남겼어요 (${r.space})` : `👣 발자국을 남겼어요`);
+          ? `👣 ${r.space} 안에서 이 길을 밟았어요`
+          : first ? '👣 첫 발자국 — 이 길이 채택됐어요. 뒷사람이 더 쉽게 찾습니다'
+                  : '👣 밟았어요 — 두루 밟힐수록 위로 올라가고, 먼저 알아본 안목도 쌓입니다');
         loadLedger(); loadScores(); refreshPane(c);
       }catch(e){ out.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
     };
