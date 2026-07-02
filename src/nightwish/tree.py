@@ -698,7 +698,36 @@ class OntologyTree:
         base = self.scoring.authority_of(node_id)
         if self._is_group(space) and space in self.group_scoring:
             base += self.group_scoring[space].authority_of(node_id)
-        return base * self.diversity_factor(node_id)
+        return (base * self.diversity_factor(node_id)
+                * self.freshness_of(node_id)[1])
+
+    # -- 신선도(노트 18 P1) — 지식은 썩는다: 시계가 자동 계산, 사람 입력 0 --------
+    #: answered_at 경과 기준. 판정·폐기는 언제나 사람(자동 폐기 없음) — 배지와
+    #: *완만한* 랭킹 계수(tie-breaker급, 권위를 압도하지 않게)만 단다.
+    FRESHNESS_FRESH_DAYS = 90
+    FRESHNESS_AGING_DAYS = 365
+    FRESHNESS_FACTORS = {"fresh": 1.0, "aging": 0.97, "stale": 0.9}
+
+    def freshness_of(self, node_id: str) -> tuple[str, float]:
+        """(라벨, 랭킹 계수). 라벨 = fresh(🟢 ≤90d) / aging(🟡 ≤1y) / stale(🔴).
+
+        시각 스탬프가 없거나(사람이 쓴 페이지) 파싱 불가면 fresh로 둔다 —
+        신선도는 *경고 신호*지 게이트가 아니므로 불확실은 무죄 추정.
+        """
+        n = self._require(node_id)
+        if not n.answered_at:
+            return "fresh", 1.0
+        from datetime import datetime, timezone
+        try:
+            t = datetime.fromisoformat(n.answered_at)
+        except ValueError:
+            return "fresh", 1.0
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        days = (datetime.now(timezone.utc) - t).days
+        label = ("fresh" if days <= self.FRESHNESS_FRESH_DAYS
+                 else "aging" if days <= self.FRESHNESS_AGING_DAYS else "stale")
+        return label, self.FRESHNESS_FACTORS[label]
 
     # -- 두루(diversity) — 결탁 묶음을 √n 표로 접는 읽기시점 렌즈 (노트 17 §5) ----
     #: 참여자 > cap 인 인기 노드는 겹침 신호에서 제외 (IDF≈0 — 자연스러운 합의)
