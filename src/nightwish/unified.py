@@ -528,6 +528,9 @@ def _node_view(svc: UnifiedService, node_id: str, space: str, *, full: bool = Fa
     view["indep"] = round(eff_w, 1)
     # 채택 = 사람이 평가(스테이크)한 답. 평가 전 AI 초안은 검색엔 보이되 '초안'으로 표시.
     view["adopted"] = view["staked"] > 0
+    # 신선도(노트 18 P1): 시계 자동. stale+채택본이면 재검 넛지 — 판정은 사람.
+    view["freshness"] = t.freshness_of(n.id)[0]
+    view["recheck"] = view["freshness"] == "stale" and view["adopted"]
     if full:
         # 발견 순서(노트 17 §3 'n번째 발견자') — 순서가 곧 자산임을 보드처럼
         view["walk_order"] = t.scoring.link_order(n.id)[:50]
@@ -847,15 +850,31 @@ def create_app() -> FastAPI:
             related = [_node_view(svc, n.id, body.space)
                        for n in svc.tree.search(body.question, body.space)[:5]
                        if n.is_answer]
-            # 답 난립 완화: 같은 질문(슬러그)의 '채택본'이 이미 있으면, 새 초안을
-            # 또 만들기 전에 그 답을 먼저 보여준다. force=True면 그래도 새로 생성.
+            # 답 난립 완화 + 교정답 우선(노트 18 P0): 같은 질문(슬러그) 군집 —
+            # 원답과 그 스레드의 기여/정정(fork) — 에서 '채택된' 노드 중 **권위
+            # 최댓값**을 먼저 보여준다. 표준답이 먼저 채택돼 스테이크가 쌓여
+            # 있어도, 더 높은 권위의 교정이 있으면 그게 이긴다. force=True면 생성.
             if not body.force:
                 dup = svc.tree.nodes.get(slugify(body.question))
-                if (dup is not None and not dup.is_stub and dup.is_answer
+                if (dup is not None and not dup.is_stub
                         and svc.tree._visible(dup, body.space)):
-                    dup_view = _node_view(svc, dup.id, body.space, full=True)
-                    if dup_view["adopted"]:
-                        return {"stage": "existing", "node": dup_view,
+                    best, best_a = None, -1.0
+                    stack = [dup.id]
+                    while stack:
+                        cur = svc.tree.nodes.get(stack.pop())
+                        if cur is None:
+                            continue
+                        stack.extend(cur.children)
+                        if (cur.is_answer and not cur.is_stub
+                                and svc.tree._visible(cur, body.space)
+                                and sum(svc.econ.staked_on(cur.id).values()) > 0):
+                            a = svc.tree.authority_in(cur.id, body.space)
+                            if a > best_a:
+                                best, best_a = cur, a
+                    if best is not None:
+                        return {"stage": "existing",
+                                "node": _node_view(svc, best.id, body.space,
+                                                   full=True),
                                 "related": related}
         # The AI draft is a (possibly multi-second) network call — do it WITHOUT
         # holding the lock, so the rest of the app (status poll, other users)

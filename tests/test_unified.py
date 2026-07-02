@@ -496,6 +496,50 @@ def test_ask_surfaces_adopted_duplicate_instead_of_new_draft(client):
     assert r3["stage"] == "ai" and r3["node"]["id"] != nid
 
 
+def test_ask_prefers_higher_authority_correction_over_first_adopted(client):
+    """노트 18 P0 — 사례의 심장: 표준답이 먼저 채택돼 있어도, 권위가 더 높은
+    정정(fork)이 같은 질문의 'existing'으로 먼저 뜬다."""
+    q = "사용량 모니터링 도구"
+    root = client.post("/api/ask", json={"question": q, "author": "a"}).json()["node"]["id"]
+    for u in ("u1", "u2", "u3"):
+        client.post("/api/mint", json={"account": u, "amount": 50})
+    # 표준답이 먼저 채택됨 (권위 1.0)
+    client.post("/api/endorse", json={"account": "u1", "node_id": root, "amount": 1})
+    r_std = client.post("/api/ask", json={"question": q, "author": "b"}).json()
+    assert r_std["stage"] == "existing" and r_std["node"]["id"] == root
+    # 정정(fork)이 오고, 더 두루 밟혀 권위가 표준답을 넘어섬 (1 + 1/2 = 1.5)
+    client.post(f"/api/nodes/{root}/contribute",
+                json={"kind": "fork", "author": "fixer",
+                      "body": "가짜 천장 반례 — 공식값을 써라"})
+    th = client.get(f"/api/nodes/{root}").json()["thread"]
+    fork_id = next(x["id"] for x in th if x["kind"] == "fork")
+    client.post("/api/endorse", json={"account": "u2", "node_id": fork_id, "amount": 1})
+    client.post("/api/endorse", json={"account": "u3", "node_id": fork_id, "amount": 1})
+    # 같은 질문을 다시 물으면 — 옛 채택본이 아니라 교정답이 먼저
+    r = client.post("/api/ask", json={"question": q, "author": "c"}).json()
+    assert r["stage"] == "existing" and r["node"]["id"] == fork_id
+
+
+def test_freshness_badge_and_recheck_nudge(client):
+    """노트 18 P1 — 신선도는 시계가 계산(입력 0): 오래된 채택답에 stale 배지와
+    재검 넛지가 붙고, 랭킹 계수가 완만히 깎인다. 자동 폐기는 없다."""
+    from nightwish import unified as u
+    nid = client.post("/api/ask", json={"question": "낡은 지식", "author": "a"}).json()["node"]["id"]
+    client.post("/api/mint", json={"account": "w", "amount": 50})
+    client.post("/api/endorse", json={"account": "w", "node_id": nid, "amount": 1})
+    svc = u.get_service()
+    fresh_auth = svc.tree.authority_in(nid)
+    v = client.get(f"/api/nodes/{nid}").json()
+    assert v["freshness"] == "fresh" and not v["recheck"]
+    # 답변 시각을 2년 전으로 되돌리면 → stale + 재검 넛지 + 완만한 감액
+    svc.tree.nodes[nid].answered_at = "2024-07-01T00:00:00+00:00"
+    v2 = client.get(f"/api/nodes/{nid}").json()
+    assert v2["freshness"] == "stale" and v2["recheck"]
+    stale_auth = svc.tree.authority_in(nid)
+    assert 0 < stale_auth < fresh_auth          # 깎이되
+    assert stale_auth >= fresh_auth * 0.9       # 권위를 압도하진 않음
+
+
 def test_scores_surfaces_first_evaluator_even_with_zero_hub(client):
     """콜드스타트 완화: 첫/단독 평가자는 hub가 0이어도 평가자 랭킹에 즉시 노출."""
     nid = client.post("/api/ask", json={"question": "평가대상", "author": "author"}).json()["node"]["id"]

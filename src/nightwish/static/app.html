@@ -712,12 +712,18 @@ function fillPane(n, c){
   // AI 초안인데 아직 아무도 안 가려냄 → 첫 판단을 청함
   const draftHint = (n.frozen && !n.adopted && !n.is_query && !n.is_stub) ? `
     <div class="prov draft-hint">🤖 AI 초안 — 아직 아무도 가려내지 않았어요. 읽고 맞다면 👣로 첫 판단자가 되어주세요. 아니면 정정을.</div>` : '';
+  // 신선도(노트 18 P1): 시계가 계산한 배지 + stale 채택본엔 재검 넛지 — 판정은 사람.
+  const freshBadge = n.freshness === 'stale' ? '<span class="badge" title="1년 넘게 갱신 안 된 답">🔴 오래됨</span>'
+    : n.freshness === 'aging' ? '<span class="badge" title="90일 넘게 갱신 안 된 답">🟡 묵음</span>' : '';
+  const recheckHint = n.recheck ? `
+    <div class="prov draft-hint">🕰️ 이 채택답은 오래됐어요 — 아직 유효한가요? 맞으면 그대로 두고, 낡았다면 <b>정정</b>으로 갱신해 주세요 (지식은 썩습니다 — 판정은 사람이).</div>` : '';
   c.innerHTML = `
     <button class="pane-close" title="이 패널(과 오른쪽)을 닫기">×</button>
     <div class="node-head">
       <h3>${esc(n.title)}</h3>
       ${n.is_query?'<span class="badge query">열린 질의</span>':''}
       ${n.frozen?'<span class="badge frozen">동결</span>':''}
+      ${freshBadge}
       ${adoptBadge(n)}
       ${n.space && n.space!=='public' ? `<span class="badge">${esc(n.space)}</span>` : ''}
     </div>
@@ -727,7 +733,7 @@ function fillPane(n, c){
     ${n.is_query ? '' : (n.is_stub
       ? `<div class="answer prov">아직 비어 있는 개념입니다 — 위키링크로 자리만 잡혔어요. 아래 버튼으로 AI 정리를 생성하세요.</div>`
       : `<div class="answer">${renderText(n.answer)}</div>`)}
-    ${queryAnswer}${stubFill}${draftHint}
+    ${queryAnswer}${stubFill}${draftHint}${recheckHint}
     ${n.outlinks && n.outlinks.length ? `<div class="prov">연결: ${
       n.outlinks.map(o=>`<span class="olw"><a class="ol" data-oid="${esc(o.id)}">${esc(o.title)}</a><a
         class="rel-chip${o.rel?' set':''}" data-target="${esc(o.id)}"

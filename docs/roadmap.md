@@ -1,5 +1,16 @@
 # 실행 로드맵 (Roadmap)
 
+> ⚠️ **트랙 주의(2026-07 감사):** 아래 P0~P3은 **풀스펙 트랙(b)** — 초기
+> 프로토타입(`economy`·`governance`·`service.py`) 기준의 로드맵이다. 현재
+> 운영 개발은 **통합 앱 트랙(`unified.py`, 테스트 158개)** 에서 진행 중이며,
+> 그 트랙의 살아있는 할 일은 설계 노트에 있다:
+> [`design/03-decisions-log.md`](design/03-decisions-log.md)(미해결 2건 — 링
+> 허브 인플레이션·스텁 파밍) · [`design/13`](design/13-footprint-economy.md)
+> (자동 자기발자국) · [`design/18`](design/18-volatility-capture.md)(P2 조건
+> 패싯·P3 반증 유도 — P0/P1은 구현됨) · [`design/19`](design/19-cost-and-byok.md)
+> (티어드 라우팅·무료 쿼터) · [`design/20`](design/20-alignment-audit.md)(감사).
+> 아래 항목 중 *검증 닻·카토 온보딩·법무*는 트랙 무관하게 유효하다.
+
 설계 정본 §10(미해결 과제)을 **실행 항목**으로 전개한다. 우선순위 순.
 각 항목은 "왜 / 무엇을 / 완료 기준(DoD)"으로 적는다.
 
