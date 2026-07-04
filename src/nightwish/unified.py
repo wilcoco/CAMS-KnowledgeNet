@@ -120,6 +120,33 @@ def _ai_active() -> bool:
     return _ai_model != "offline-stub"
 
 
+# --- 생성 쿼터 (노트 19 — 비용 사다리의 방어선) ------------------------------ #
+# 무료 기본 = 재사용·검색·평가·종합(쿼터 없음). *새 생성*만 하루 N건으로 막는다
+# — 스팸 100건이 전부 초안을 만든 실측(노트 21 §3-③)의 방어. 기본은 꺼짐(개발/
+# 오프라인); 실LLM 배포에서 NIGHTWISH_ASK_QUOTA=30 처럼 켠다.
+def _gen_quota() -> int | None:
+    raw = os.environ.get("NIGHTWISH_ASK_QUOTA", "").strip()
+    try:
+        return int(raw) if raw else None
+    except ValueError:
+        return None
+
+
+def _charge_gen_quota(svc: "UnifiedService", author: str) -> None:
+    """생성 1건을 쿼터에서 차감 — 초과면 429 (지식이 아니라 비용 게이트)."""
+    quota = _gen_quota()
+    if quota is None:
+        return
+    from datetime import date
+    key = (author, date.today().isoformat())
+    used = svc._gen_counts.get(key, 0)
+    if used >= quota:
+        raise HTTPException(
+            429, f"오늘의 생성 쿼터({quota}건)를 다 썼습니다 — 검색·재사용·발자국·"
+                 f"종합은 계속 무제한이에요. 새 답 생성은 내일 다시 할 수 있습니다.")
+    svc._gen_counts[key] = used + 1
+
+
 # --- 웹 링크 읽고 요약 (보강/정정에 URL이 들어오면) -------------------------- #
 _URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
 
@@ -206,6 +233,10 @@ class UnifiedService:
         self.db_path = db_path
         self._lock = threading.RLock()
         self._seq = 0
+        #: (author, YYYY-MM-DD) → 오늘 생성 횟수 — 생성 쿼터(노트 19)용.
+        #: 재시작에 리셋되는 인메모리 카운터로 충분: 쿼터는 지식 규칙이 아니라
+        #: *비용 방어선*이고, 재사용·검색·평가·종합은 애초에 세지 않는다.
+        self._gen_counts: dict[tuple[str, str], int] = {}
         tree, econ = self._load(db_path, hub_mode)
         self.tree, self.econ = tree, econ
 
@@ -416,6 +447,12 @@ class RelateBody(BaseModel):
     author: str = "anon"
 
 
+class CondBody(BaseModel):
+    add: list[str] = []
+    remove: list[str] = []
+    author: str = Field(min_length=1)
+
+
 class SynthBody(BaseModel):
     question: str = Field(min_length=1)
     author: str = Field(min_length=1)
@@ -531,6 +568,12 @@ def _node_view(svc: UnifiedService, node_id: str, space: str, *, full: bool = Fa
     # 신선도(노트 18 P1): 시계 자동. stale+채택본이면 재검 넛지 — 판정은 사람.
     view["freshness"] = t.freshness_of(n.id)[0]
     view["recheck"] = view["freshness"] == "stale" and view["adopted"]
+    # 정정 제기됨(노트 21 §3-①): 이 답에 fork가 달려 있으면 표시 — 원답을 밟은
+    # 사람들이 재검할 신호. 판정은 사람, 시스템은 알림만.
+    view["contested"] = any(
+        (ch := t.nodes.get(cid)) is not None and ch.action is Action.FORK
+        for cid in n.children)
+    view["conditions"] = list(n.conditions)
     if full:
         # 발견 순서(노트 17 §3 'n번째 발견자') — 순서가 곧 자산임을 보드처럼
         view["walk_order"] = t.scoring.link_order(n.id)[:50]
@@ -876,6 +919,7 @@ def create_app() -> FastAPI:
                                 "node": _node_view(svc, best.id, body.space,
                                                    full=True),
                                 "related": related}
+        _charge_gen_quota(svc, body.author)   # 생성만 게이트 — 재사용은 위에서 무료
         # The AI draft is a (possibly multi-second) network call — do it WITHOUT
         # holding the lock, so the rest of the app (status poll, other users)
         # isn't frozen while a generation is in flight.
@@ -925,14 +969,18 @@ def create_app() -> FastAPI:
         with svc.reading():
             cands = [n for n in svc.tree.search(body.question, body.space)[:8]
                      if n.is_answer and not n.is_stub]
-            # 사람이 가려낸(발자국 받은) 답 우선 — 평가가 근거의 자격
-            cands.sort(key=lambda n: -sum(svc.econ.staked_on(n.id).values()))
+            # 사람이 가려낸 답 우선 — 렌즈 권위(두루·신선도 반영, 노트 18 P0)로
+            # 정렬하고 스테이크로 동률을 가른다: 신선한 교정이 낡은 원답 위로.
+            cands.sort(key=lambda n: (-svc.tree.authority_in(n.id, body.space),
+                                      -sum(svc.econ.staked_on(n.id).values())))
             sources = cands[:5]
             if not sources:
                 raise HTTPException(
                     404, "종합할 기존 답이 없습니다 — 먼저 AI에게 질문해 첫 길을 내세요")
             src_texts = [
-                f"[{i}] {s.question}\n{svc.tree.resolved_answer(s.id).strip()[:700]}"
+                f"[{i}] {s.question}"
+                + (f" (적용 조건: {', '.join(s.conditions)})" if s.conditions else "")
+                + f"\n{svc.tree.resolved_answer(s.id).strip()[:700]}"
                 for i, s in enumerate(sources, 1)
             ]
             titles = [s.question for s in sources]
@@ -987,7 +1035,10 @@ def create_app() -> FastAPI:
                 q = body.body.strip() or f'"{span}" — 이 맥락에서 자세히 설명'
             else:
                 q = body.body
-            ai_text = _ask_ai(q, _anchor_prompt(ctx_tree, node_id))
+            ai_text = None
+            if kind in ("followup", "unfold"):     # 생성을 쓰는 kind만 — 쿼터 게이트
+                _charge_gen_quota(svc, body.author)
+                ai_text = _ask_ai(q, _anchor_prompt(ctx_tree, node_id))
         # 보강/정정에 웹 링크가 들어오면 그 페이지를 *읽고* 요약해 본문에 덧붙인다.
         # 단일 원천·국소(노트 12) — 전역 재통합 아님. 네트워크/LLM 없으면 원문 그대로.
         if kind in ("comment", "fork"):
@@ -1008,8 +1059,14 @@ def create_app() -> FastAPI:
                 elif kind == "fork":
                     if not body.body.strip():
                         raise HTTPException(400, "정정/다른 답에는 내용이 필요합니다")
-                    svc.tree.fork(svc._child_id(node_id), node_id, body.author,
+                    fork_id = svc._child_id(node_id)
+                    svc.tree.fork(fork_id, node_id, body.author,
                                   body.body, stake=0.0, space=body.space)
+                    # 노트 18 P3: 정정은 원답과 「대립」 — 포크라는 행위 자체가
+                    # 저자의 판단이므로 그 관계를 저자 명의로 기록한다(자동 AI
+                    # 확정이 아니라 사람 행위의 기록). 반증 근거는 본문이 담는다.
+                    with contextlib.suppress(OntologyError):
+                        svc.tree.relate(fork_id, node_id, "대립", body.author)
                 elif kind == "followup":
                     qid = svc._child_id(node_id)
                     svc.tree.contribute(qid, node_id, body.author, answer="",
@@ -1067,6 +1124,8 @@ def create_app() -> FastAPI:
         existing = ctx_tree.nodes.get(target_slug)
         need_ai = existing is None or existing.is_stub
         # AI answer (slow) anchored to the source — outside the lock
+        if need_ai:
+            _charge_gen_quota(svc, body.author)
         ai_text = _ask_ai(body.question, _anchor_prompt(ctx_tree, node_id)) if need_ai else None
         with svc.writing():
             source = svc.tree.nodes.get(node_id)
@@ -1106,6 +1165,37 @@ def create_app() -> FastAPI:
                 raise HTTPException(400, str(e))
             return {"node": node_id, "target": body.target,
                     "rels": {t: len(u) for t, u in rels.items()}}
+
+    @app.post("/api/nodes/{node_id}/conditions")
+    def set_conditions(node_id: str, body: CondBody):
+        """적용 조건 패싯 확정/제거 (노트 18 P2) — 사람의 탭만 상태를 바꾼다."""
+        svc = get_service()
+        with svc.writing():
+            try:
+                conds = svc.tree.set_conditions(node_id, body.add, body.remove)
+            except OntologyError as e:
+                raise HTTPException(404, str(e))
+            return {"node": node_id, "conditions": conds}
+
+    @app.post("/api/nodes/{node_id}/conditions/suggest")
+    def suggest_conditions(node_id: str, body: FillBody):
+        """AI가 본문에서 적용 조건 *후보*를 뽑아 준다 — 확정은 사람의 탭으로만
+        (노트 16 릴레이션 확인과 동형: AI 제안 → 탭 확인, 새 폼 없음)."""
+        svc = get_service()
+        with svc.reading():
+            n = svc.tree.nodes.get(node_id)
+            if n is None or n.is_stub:
+                raise HTTPException(404, f"node {node_id!r} not found")
+            text = f"{n.question}\n{n.answer}"[:1500]
+        raw = _ask_ai(
+            "아래 답이 유효한 *적용 조건*(환경/버전/플랜/범위 한정)을 찾아라. "
+            "본문에 명시된 것만, 0~3개, 한 줄에 하나, 각 20자 이내 명사구로. "
+            "조건이 없으면 '없음'만 출력.\n\n" + text)
+        cands = [ln.strip(" -·*") for ln in raw.splitlines() if ln.strip()]
+        cands = [c[:60] for c in cands
+                 if c and c != "없음" and len(c) <= 60][:3]
+        return {"node": node_id, "suggestions": cands,
+                "hint": "탭하면 조건으로 확정됩니다 — 확정 전엔 아무것도 바뀌지 않아요"}
 
     @app.post("/api/classify")
     def classify(body: ClassifyBody):
@@ -1193,6 +1283,7 @@ def create_app() -> FastAPI:
             if not n.is_stub:
                 raise HTTPException(409, "이미 채워진 개념입니다")
             question = n.question
+        _charge_gen_quota(svc, body.author)
         # AI draft is a (slow) network call — do it outside the write lock.
         text = _ask_ai(question)
         with svc.writing():
@@ -1230,6 +1321,8 @@ def create_app() -> FastAPI:
                 raise HTTPException(404, f"open query {node_id!r} not found")
             question = q.question
         # AI generation is a slow network call — outside the lock.
+        if body.ai:
+            _charge_gen_quota(svc, body.author)
         text = _ask_ai(question) if body.ai else body.body
         with svc.writing():
             if node_id not in svc.tree.nodes:
@@ -1427,6 +1520,27 @@ def create_app() -> FastAPI:
             foresight.sort(key=lambda f: (-f["after"], f["pos"]))
             out["foresight"] = foresight[:8]
             out["walked"] = len(foresight)
+            # 재검(노트 21 §3-①): 내가 밟은 길에 정정이 제기됨 — 고안목의
+            # 갈아타기가 교정 역전의 관건이므로, 원답 발자국자에게 알린다.
+            recheck = []
+            for fid, order in t.scoring._linkers.items():
+                if user not in order:
+                    continue
+                fn = t.nodes.get(fid)
+                if fn is None or not t._visible(fn, space):
+                    continue
+                for cid in fn.children:
+                    ch = t.nodes.get(cid)
+                    # NB: _linkers는 defaultdict — 순회 중 키 생성 금지(.get으로)
+                    if (ch is not None and ch.action is Action.FORK
+                            and user not in t.scoring._linkers.get(cid, [])):
+                        recheck.append({
+                            "id": fid, "title": fn.question or "(답)",
+                            "fork_id": cid,
+                            "fork_note": (ch.answer or "").strip()[:80],
+                        })
+                        break
+            out["recheck"] = recheck[:6]
             if t._is_group(space):
                 ghub = t.scoring.hub_of(user)
                 if space in t.group_scoring:
@@ -1625,7 +1739,12 @@ def create_app() -> FastAPI:
             # the co-author set is the distinct chain of people who staked.
             first_time = svc.tree.scoring.linker_position(body.account, body.node_id) is None
             if first_time and body.account != n.author:
-                svc.tree.scoring.link(body.account, body.node_id, weight=body.amount)
+                # 무리 내부 상속 감액(노트 21 §3): 같은 무리(두루 군집)의 이전
+                # 발자국자에게 가는 안목 상속은 1/|무리| — 링이 서로 밟아 서로의
+                # 안목을 키우는 폐회로를 적립단에서 누른다. 독립 검증은 그대로.
+                svc.tree.scoring.link(body.account, body.node_id,
+                                      weight=body.amount,
+                                      kin=svc.tree.kin_of(body.account))
             svc.tree.bump()   # public authority changed → invalidate scoreboard memo
             return {
                 "account": body.account,
