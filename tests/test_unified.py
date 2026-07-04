@@ -333,6 +333,9 @@ def test_classify_suggests_concept_vs_unfold(client):
 def test_wikilink_authority_and_endorse_dividend(client):
     # alice links [[핵심개념]] first; bob links it later → alice's foresight (hub)
     # is validated by the later linker (patent: earlier discoverer earns).
+    # 노트 21 §3-②: 안목은 *실재하는 글*을 가리킬 때만 — 스텁을 낳는 링크는
+    # 적립 없음(파밍 차단). 그래서 개념을 먼저 실체로 만든다.
+    client.post("/api/ask", json={"question": "핵심개념", "author": "seed"})
     client.post("/api/nodes", json={"title": "문서X", "body": "[[핵심개념]] 참고",
                                     "author": "alice"})
     client.post("/api/nodes", json={"title": "문서Y", "body": "[[핵심개념]] 또 참고",
@@ -561,7 +564,11 @@ def test_expand_creates_linked_concept_with_ai_answer(client):
     assert r["target"]["frozen"] and r["target"]["answer"]
     # 원본 → 개념 으로 연결(outlinks)이 생김
     assert any(o["id"] == r["target"]["id"] for o in r["source"]["outlinks"])
-    # 거는 사람의 안목(hub)이 적립됨
+    # 거는 사람의 안목(hub)은 *뒤에 딴 사람이 따라올 때* 적립된다(특허 —
+    # 선견은 후속 검증으로 보상; 스텁 자가-링크 아티팩트는 노트 21 §3-②로 제거됨)
+    client.post("/api/mint", json={"account": "follower", "amount": 10})
+    client.post("/api/endorse", json={"account": "follower",
+                                      "node_id": r["target"]["id"], "amount": 1})
     hubs = {u["user"]: u["hub"] for u in client.get("/api/scores").json()["top_contributors"]}
     assert hubs.get("u", 0) > 0
 
@@ -746,3 +753,138 @@ def test_synthesize_grounds_on_existing_answers(client):
     assert "근거" in node["answer"]                 # 출처 섹션이 박힘
     # 출처가 위키링크로 자동 연결 — links에 근거 노드 slug 포함
     assert set(node["links"]) & src_ids
+
+
+# ── 노트 21 개선 회귀 ────────────────────────────────────────────────────────
+
+def test_stub_link_earns_no_hub_but_real_link_does(client):
+    """노트 21 §3-② — 스텁 파밍 차단: 빈 개념(스텁)을 가리키는 위키링크는 안목을
+    적립하지 않는다. 대상이 실제 글이면 종전대로 적립."""
+    from nightwish import unified as u
+    from nightwish.tree import slugify
+    svc = u.get_service()
+    # 파머: 스텁만 가리키는 모음글 → 허브 0
+    client.post("/api/nodes", json={"title": "파머 모음글",
+                                    "body": "[[없는개념A]] [[없는개념B]]",
+                                    "author": "farmer"})
+    assert svc.tree.scoring.hub_of("farmer") == 0.0
+    # 실제 글을 가리키면 링크 순서에 등록된다 (적립 대상)
+    client.post("/api/ask", json={"question": "실재 개념", "author": "a"})
+    client.post("/api/nodes", json={"title": "정상 인용글",
+                                    "body": "[[실재 개념]] 참고",
+                                    "author": "citer"})
+    assert svc.tree.scoring.linker_position("citer", slugify("실재 개념")) is not None
+    # 스텁이 승격된 *뒤* 링커부터 적립 — 채워진 개념을 가리키면 등록됨
+    client.post(f"/api/nodes/{slugify('없는개념A')}/fill", json={"author": "b"})
+    client.post("/api/nodes", json={"title": "승격 후 인용글",
+                                    "body": "[[없는개념A]] 참고", "author": "late"})
+    assert svc.tree.scoring.linker_position("late", slugify("없는개념A")) is not None
+
+
+def test_ring_kin_discount_damps_mutual_hub_inflation(client):
+    """노트 21 §3(잔여) — 같은 무리로 접힌 링의 상호 허브 상속은 1/|무리|로 감액.
+    독립 사용자의 상속은 그대로."""
+    from nightwish import unified as u
+    svc = u.get_service()
+    ring = [f"rg{i}" for i in range(1, 5)]
+    ctrl = [f"in{i}" for i in range(1, 5)]
+    for x in ring + ctrl:
+        client.post("/api/mint", json={"account": x, "amount": 50})
+    # 링: 희소 노드 3개를 똑같이 함께 밟아 무리로 접힘 (MIN_SHARED=3)
+    rn = [client.post("/api/ask", json={"question": f"링 전용 {i}", "author": "rg1"}
+                      ).json()["node"]["id"] for i in range(3)]
+    # 대조군: 각자 다른 노드 + 공유 1개만 (무리 아님)
+    cn = [client.post("/api/ask", json={"question": f"독립 주제 {i}", "author": "in1"}
+                      ).json()["node"]["id"] for i in range(3)]
+    for nid in rn:
+        for x in ring:
+            client.post("/api/endorse", json={"account": x, "node_id": nid, "amount": 1})
+    for i, x in enumerate(ctrl):
+        client.post("/api/endorse", json={"account": x, "node_id": cn[i % 3], "amount": 1})
+    # 대조군 4명이 새 노드 하나에 순서대로 → 정상 harmonic 상속
+    solo = client.post("/api/ask", json={"question": "공용 주제", "author": "z"}).json()["node"]["id"]
+    for x in ctrl:
+        client.post("/api/endorse", json={"account": x, "node_id": solo, "amount": 1})
+    hub = svc.tree.scoring.hub_of
+    # 링 1번(먼저 밟은 자)의 허브 < 독립 1번의 허브 — 같은 구조인데 무리라서 감액
+    assert hub("rg1") < hub("in1")
+
+
+def test_generation_quota_gates_only_new_drafts(client, monkeypatch):
+    """노트 19/21 §3-③ — 생성 쿼터: 새 생성만 하루 N건, 재사용·검색은 무제한."""
+    monkeypatch.setenv("NIGHTWISH_ASK_QUOTA", "2")
+    r1 = client.post("/api/ask", json={"question": "쿼터 질문 하나", "author": "q"})
+    r2 = client.post("/api/ask", json={"question": "쿼터 질문 둘", "author": "q"})
+    assert r1.status_code == 200 and r2.status_code == 200
+    r3 = client.post("/api/ask", json={"question": "쿼터 질문 셋", "author": "q"})
+    assert r3.status_code == 429 and "쿼터" in r3.json()["detail"]
+    # 다른 사용자는 영향 없음
+    assert client.post("/api/ask", json={"question": "남의 질문", "author": "p"}).status_code == 200
+    # 재사용(existing)은 쿼터를 안 먹는다 — 채택본을 만들어 재질문
+    nid = r1.json()["node"]["id"]
+    client.post("/api/mint", json={"account": "w", "amount": 10})
+    client.post("/api/endorse", json={"account": "w", "node_id": nid, "amount": 1})
+    r4 = client.post("/api/ask", json={"question": "쿼터 질문 하나", "author": "q"})
+    assert r4.status_code == 200 and r4.json()["stage"] == "existing"
+    # 검색도 무제한
+    assert client.get("/api/search?q=쿼터").status_code == 200
+
+
+def test_fork_marks_contested_and_recheck_for_walkers(client):
+    """노트 21 §3-① — 정정 제기: 원답에 contested 표시, 원답을 밟았던 사람의
+    프로필(me/stats)에 재검 목록이 뜬다. 자동 대립 관계도 저자 명의로 기록."""
+    root = client.post("/api/ask", json={"question": "재검 주제", "author": "a"}).json()["node"]["id"]
+    client.post("/api/mint", json={"account": "walker", "amount": 10})
+    client.post("/api/endorse", json={"account": "walker", "node_id": root, "amount": 1})
+    client.post(f"/api/nodes/{root}/contribute",
+                json={"kind": "fork", "author": "fx", "body": "반례: 실측 불일치"})
+    v = client.get(f"/api/nodes/{root}").json()
+    assert v["contested"] is True
+    m = client.get("/api/me/stats?user=walker").json()
+    assert any(r["id"] == root for r in m["recheck"])
+    # 정정을 밟으면 재검 목록에서 사라진다 (재판단 완료)
+    fork_id = m["recheck"][0]["fork_id"]
+    client.post("/api/endorse", json={"account": "walker", "node_id": fork_id, "amount": 1})
+    m2 = client.get("/api/me/stats?user=walker").json()
+    assert all(r["id"] != root for r in m2["recheck"])
+    # fork → 원답 「대립」 관계가 fork 저자 명의로 기록됨
+    from nightwish import unified as u
+    fk = u.get_service().tree.nodes[fork_id]
+    assert "fx" in fk.link_rels.get(root, {}).get("대립", [])
+
+
+def test_conditions_facet_tap_confirm_and_roundtrip(client):
+    """노트 18 P2 — 조건 패싯: 사람이 탭으로 확정/제거, 뷰·직렬화 왕복 보존."""
+    nid = client.post("/api/ask", json={"question": "조건 주제", "author": "a"}).json()["node"]["id"]
+    r = client.post(f"/api/nodes/{nid}/conditions",
+                    json={"add": ["Pro/Max 한정", "v2 이상"], "remove": [], "author": "u"}).json()
+    assert r["conditions"] == ["Pro/Max 한정", "v2 이상"]
+    r2 = client.post(f"/api/nodes/{nid}/conditions",
+                     json={"add": [], "remove": ["v2 이상"], "author": "u"}).json()
+    assert r2["conditions"] == ["Pro/Max 한정"]
+    assert client.get(f"/api/nodes/{nid}").json()["conditions"] == ["Pro/Max 한정"]
+    # 직렬화 왕복 (스냅샷 JSON)
+    from nightwish import unified as u
+    t = u.get_service().tree
+    again = type(t).from_json(t.to_json())
+    assert again.nodes[nid].conditions == ["Pro/Max 한정"]
+    # AI 제안은 후보만 — 상태를 바꾸지 않는다
+    s = client.post(f"/api/nodes/{nid}/conditions/suggest", json={"author": "u"})
+    assert s.status_code == 200
+    assert client.get(f"/api/nodes/{nid}").json()["conditions"] == ["Pro/Max 한정"]
+
+
+def test_synthesize_orders_sources_by_lens_authority(client):
+    """노트 18 P0 잔여 — 종합 근거가 렌즈 권위(두루·신선도 포함) 순."""
+    a = client.post("/api/ask", json={"question": "정렬 주제 하나", "author": "x"}).json()["node"]["id"]
+    b = client.post("/api/ask", json={"question": "정렬 주제 둘", "author": "y"}).json()["node"]["id"]
+    for i, nid in enumerate([a, b]):
+        for j in range(1 if nid == a else 3):
+            u_ = f"sv{i}{j}"
+            client.post("/api/mint", json={"account": u_, "amount": 10})
+            client.post("/api/endorse", json={"account": u_, "node_id": nid, "amount": 1})
+    r = client.post("/api/synthesize", json={"question": "정렬 주제", "author": "z"}).json()
+    titles = r.get("sources") or []
+    if titles:                       # 근거가 잡혔다면 권위 높은 b가 앞
+        first = titles[0]["title"] if isinstance(titles[0], dict) else titles[0]
+        assert "둘" in str(first)

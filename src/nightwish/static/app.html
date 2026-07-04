@@ -717,6 +717,12 @@ function fillPane(n, c){
     : n.freshness === 'aging' ? '<span class="badge" title="90일 넘게 갱신 안 된 답">🟡 묵음</span>' : '';
   const recheckHint = n.recheck ? `
     <div class="prov draft-hint">🕰️ 이 채택답은 오래됐어요 — 아직 유효한가요? 맞으면 그대로 두고, 낡았다면 <b>정정</b>으로 갱신해 주세요 (지식은 썩습니다 — 판정은 사람이).</div>` : '';
+  // 정정 제기됨(노트 21): 이 답에 다른 답·정정이 달림 — 재검은 사람이
+  const contestedBadge = n.contested ? '<span class="badge" style="border-color:var(--fork);color:var(--fork)" title="이 답에 정정/다른 답이 제기되어 있습니다 — 아래 스레드에서 견줘보세요">⚔️ 정정 제기됨</span>' : '';
+  // 적용 조건 칩(노트 18 P2): AI가 제안, 사람이 탭으로 확정/제거
+  const condChips = `<div class="prov cond-row" style="margin-top:4px">${
+    (n.conditions||[]).map(cd=>`<span class="badge cond" title="이 답의 적용 조건 — ×로 제거">${esc(cd)} <a class="cond-x" data-c="${esc(cd)}" style="cursor:pointer">×</a></span>`).join(' ')
+    }${(!n.is_stub && !n.is_query) ? ' <a class="cond-suggest" style="cursor:pointer" title="AI가 본문에서 적용 조건 후보를 찾아줍니다 — 확정은 당신의 탭">＋조건</a>' : ''}</div>`;
   c.innerHTML = `
     <button class="pane-close" title="이 패널(과 오른쪽)을 닫기">×</button>
     <div class="node-head">
@@ -724,6 +730,7 @@ function fillPane(n, c){
       ${n.is_query?'<span class="badge query">열린 질의</span>':''}
       ${n.frozen?'<span class="badge frozen">동결</span>':''}
       ${freshBadge}
+      ${contestedBadge}
       ${adoptBadge(n)}
       ${n.space && n.space!=='public' ? `<span class="badge">${esc(n.space)}</span>` : ''}
     </div>
@@ -733,7 +740,7 @@ function fillPane(n, c){
     ${n.is_query ? '' : (n.is_stub
       ? `<div class="answer prov">아직 비어 있는 개념입니다 — 위키링크로 자리만 잡혔어요. 아래 버튼으로 AI 정리를 생성하세요.</div>`
       : `<div class="answer">${renderText(n.answer)}</div>`)}
-    ${queryAnswer}${stubFill}${draftHint}${recheckHint}
+    ${condChips}${queryAnswer}${stubFill}${draftHint}${recheckHint}
     ${n.outlinks && n.outlinks.length ? `<div class="prov">연결: ${
       n.outlinks.map(o=>`<span class="olw"><a class="ol" data-oid="${esc(o.id)}">${esc(o.title)}</a><a
         class="rel-chip${o.rel?' set':''}" data-target="${esc(o.id)}"
@@ -785,6 +792,35 @@ function fillPane(n, c){
     document.body.appendChild(pop);
     setTimeout(()=> document.addEventListener('click', ()=> pop.remove(), {once:true}));
   });
+  // 조건 패싯(노트 18 P2): × 제거 / ＋조건 → AI 후보 → 탭으로 확정
+  c.querySelectorAll('.cond-x').forEach(x => x.onclick = async (ev)=>{
+    ev.stopPropagation();
+    try{ await api('POST', `/api/nodes/${encodeURIComponent(n.id)}/conditions`,
+                   {remove:[x.dataset.c], add:[], author: me()});
+         refreshPane(c); }catch(e){ alert(e.message); }
+  });
+  const sug = c.querySelector('.cond-suggest');
+  if (sug) sug.onclick = async (ev)=>{
+    ev.stopPropagation(); sug.textContent = '…';
+    try{
+      const r = await api('POST', `/api/nodes/${encodeURIComponent(n.id)}/conditions/suggest`,
+                          {author: me()});
+      const row = c.querySelector('.cond-row');
+      if (!(r.suggestions||[]).length){ toast('본문에서 찾은 조건 후보가 없어요'); sug.textContent='＋조건'; return; }
+      r.suggestions.forEach(sgt=>{
+        const b = document.createElement('a');
+        b.className='badge'; b.style.cursor='pointer'; b.style.opacity='.65';
+        b.textContent = `＋ ${sgt}`; b.title = 'AI 후보 — 탭하면 조건으로 확정';
+        b.onclick = async ()=>{ try{
+          await api('POST', `/api/nodes/${encodeURIComponent(n.id)}/conditions`,
+                    {add:[sgt], remove:[], author: me()});
+          toast('조건 확정 — 이 답이 언제 유효한지 다음 사람이 압니다');
+          refreshPane(c); }catch(e){ alert(e.message); } };
+        row.insertBefore(b, sug);
+      });
+      sug.textContent='＋조건';
+    }catch(e){ alert(e.message); sug.textContent='＋조건'; }
+  };
   c.querySelectorAll('a.wl').forEach(a => a.onclick = ()=> {
     const id = linkMap[a.dataset.link];
     if (id) pushPane(id, c);
@@ -861,7 +897,7 @@ function showReply(id, act, pane){
   const box = [...pane.querySelectorAll('.reply')].find(r => r.dataset.rid === id);
   if (!box) return;
   const ph = {comment:'보강할 의견 — 웹 링크(URL) 붙여넣어도 됩니다',
-              fork:'정정 또는 다른 답 — 근거 웹 링크(URL) 붙여넣어도 됩니다',
+              fork:'왜 기존 답이 틀렸나(반례·실측·적용 조건) + 교정된 답 — 근거 URL 환영. 이유가 남아야 틀린 답이 부활하지 못합니다',
               followup:'후속 질문'}[act];
   const goLabel = act==='followup' ? 'AI에게 묻기' : '보내기';
   box.innerHTML = `<textarea placeholder="${ph}"></textarea>
@@ -911,6 +947,13 @@ async function loadMeStats(){
       <div class="sc"><a class="me-node" data-oid="${esc(f.id)}" title="${esc(f.title)}">${esc(f.title)}</a>
         <span class="v" title="내가 ${f.pos}번째, 그 후 ${f.after}명">${f.pos}번째 · +${f.after}명</span></div>`).join('')
     || '<div class="prov">아직 따라온 사람 없음 — 밟아둔 길이 자라면 여기 보입니다</div>'}` : '';
+  // 🔎 재검(노트 21): 내가 밟은 길에 정정이 제기됨 — 갈아탈지 재판단은 나의 몫
+  const rc = s.recheck || [];
+  const rcHTML = rc.length ? `
+    <div class="prov" style="margin:10px 0 2px" title="당신이 밟은 답에 정정/다른 답이 제기됐습니다 — 다시 보고, 정정이 맞다면 그쪽을 밟아주세요. 판정은 사람이 합니다">🔎 재검 — 내가 밟은 길에 정정이 제기됨</div>
+    ${rc.map(r=>`
+      <div class="sc"><a class="me-node" data-oid="${esc(r.id)}" title="${esc(r.fork_note)}">${esc(r.title)}</a>
+        <span class="v" style="color:var(--fork)">⚔️ 재검</span></div>`).join('')}` : '';
   $('#me-stats').innerHTML = `
     <div class="prov">나 <b>${esc(s.user)}</b> · 안목(허브) ${s.hub}</div>
     <div class="sc big" data-ov="all"><span>전체 점유율</span>
@@ -919,6 +962,7 @@ async function loadMeStats(){
     <div class="prov" style="margin:8px 0 2px">영역(루트)별 · 영향력 권위 ${ov.authority} (${ov.authority_pct}%)</div>
     ${cats || '<div class="prov">아직 없음</div>'}
     ${grp}
+    ${rcHTML}
     ${fsHTML}
     <div class="row" style="margin-top:8px">
       <button class="sec" id="export-mine" title="내가 정리한 노드를 옵시디안 볼트(zip)로 — [[위키링크]] 그대로">⬇ 옵시디안으로 내보내기</button>

@@ -141,6 +141,9 @@ class Node:
     #: ``{target_slug: {rel_type: [confirming users…]}}``. A bare link stays
     #: unlabeled (=관련, zero friction); a type earns trust as people confirm it.
     link_rels: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    #: 적용 조건 패싯(노트 18 P2) — "이 답은 {Pro/Max}에서" 같은 맥락 라벨.
+    #: AI가 제안하고 사람이 탭으로 확정/제거 — 강제 입력 폼 없음(노동화 금지).
+    conditions: list[str] = field(default_factory=list)
 
     @property
     def is_unfold(self) -> bool:
@@ -250,7 +253,12 @@ class OntologyTree:
                 )
             # Only *newly added* links score, so re-editing a body does not
             # double-count — order (who linked first) stays meaningful.
-            if ts not in previous and node.author != STUB_AUTHOR:
+            # 스텁 파밍 차단(노트 21 §3-②): 방금 위키링크가 *만들어 낸* 빈 개념
+            # (스텁)을 가리키는 건 안목이 아니다 — 흔한 슬러그 모음글만으로 허브
+            # 105 vs 큐레이터 28이 실측됐다. 적립은 대상이 *실제 글*일 때만;
+            # 스텁이 승격된 뒤에 링크하는 사람부터 안목이 쌓인다.
+            if (ts not in previous and node.author != STUB_AUTHOR
+                    and not self.nodes[ts].is_stub):
                 self.scoring.link(node.author, ts, weight=1.0)
         node.links = link_slugs
         # Keep the search index fresh at write time (cheap, incremental). Stubs
@@ -655,13 +663,35 @@ class OntologyTree:
         if rel not in self.REL_TYPES:
             raise OntologyError(
                 f"unknown relation type {rel!r} — one of {self.REL_TYPES}")
-        if target not in node.links:
+        # 위키링크 대상 또는 *부모*(정정 fork가 원답을 「대립」으로 가리키는 노트
+        # 18 P3 동선 — 링크 없이도 부모는 항상 관계 지을 수 있는 자연 대상).
+        if target not in node.links and target != node.parent_id:
             raise OntologyError(f"{target!r} is not linked from {node_id!r}")
         users = node.link_rels.setdefault(target, {}).setdefault(rel, [])
         if user not in users:
             users.append(user)
         node.updated_at = self._tick()
         return {t: list(u) for t, u in node.link_rels[target].items()}
+
+    def set_conditions(self, node_id: str, add: list[str], remove: list[str],
+                       ) -> list[str]:
+        """적용 조건 패싯 갱신(노트 18 P2) — 사람이 탭으로 확정/제거.
+
+        AI는 후보만 제안하고 여기 못 쓴다(자동 확정 배척, 노트 16과 동형).
+        조건은 짧은 라벨(≤60자)·최대 6개 — 폼이 아니라 칩이다.
+        """
+        node = self._require(node_id)
+        for c in remove:
+            c = c.strip()
+            if c in node.conditions:
+                node.conditions.remove(c)
+        for c in add:
+            c = c.strip()[:60]
+            if c and c not in node.conditions and len(node.conditions) < 6:
+                node.conditions.append(c)
+        node.updated_at = self._tick()
+        self.bump()
+        return list(node.conditions)
 
     # -- layers (public commons + group overlays) -----------------------------
     @staticmethod
@@ -789,6 +819,19 @@ class OntologyTree:
         clusters = {u: find(u) for u in parent}
         self._div_cache = (self._rev, clusters)
         return clusters
+
+    def kin_of(self, user: str) -> frozenset[str] | None:
+        """``user``와 같은 무리로 접힌 구성원 집합(본인 포함), 무리가 없으면 None.
+
+        허브 상속의 적립단 감액(노트 21 §3)에 쓰인다 — 두루 렌즈와 같은 군집
+        판정을 공유하므로 새 휴리스틱이 아니라 같은 신호의 쓰기단 적용이다.
+        """
+        clusters = self._walker_clusters()
+        root = clusters.get(user)
+        if root is None:
+            return None
+        members = frozenset(u for u, r in clusters.items() if r == root)
+        return members if len(members) >= 2 else None
 
     def effective_walkers(self, node_id: str) -> tuple[int, float]:
         """(원시 발자국 사람 수, 유효 독립 수) — 같은 무리는 √n 표.
@@ -940,6 +983,7 @@ class OntologyTree:
             "last_editor": n.last_editor, "anchor": n.anchor,
             "link_rels": {k: {t: list(u) for t, u in r.items()}
                           for k, r in n.link_rels.items()},
+            "conditions": list(n.conditions),
         }
 
     @staticmethod
@@ -957,6 +1001,7 @@ class OntologyTree:
             last_editor=d.get("last_editor", ""), anchor=d.get("anchor", ""),
             link_rels={k: {t: list(u) for t, u in (r or {}).items()}
                        for k, r in d.get("link_rels", {}).items()},
+            conditions=list(d.get("conditions", [])),
         )
 
     @classmethod

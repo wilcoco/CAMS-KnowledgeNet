@@ -70,7 +70,8 @@ class ScoreEngine:
         if self.mode not in HUB_MODES:
             raise ValueError(f"mode must be one of {HUB_MODES}, got {self.mode!r}")
 
-    def link(self, evaluator: str, node_id: str, *, weight: float = 1.0) -> None:
+    def link(self, evaluator: str, node_id: str, *, weight: float = 1.0,
+             kin: frozenset[str] | set[str] | None = None) -> None:
         """Record that ``evaluator`` linked to ``node_id`` (the next in order).
 
         Two incremental effects, both order-sensitive:
@@ -83,23 +84,34 @@ class ScoreEngine:
         2. **Confer authority.** ``node_id`` gains authority equal to a base
            amount plus the *current hub* of the linker — a high-hub evaluator's
            endorsement is worth more than a stranger's (수학식 10).
+
+        ``kin`` — 무리 내부 상속 감액(노트 13 §7 3단계, 노트 21 §3): 새 링커와
+        *같은 무리*로 판정된(두루 군집) 이전 링커에게 가는 안목 상속은
+        ``1/|무리|``로 줄인다. 패거리가 서로 밟아 서로의 안목을 키우는 폐회로만
+        누르고, 무리 밖 독립 검증의 상속은 그대로다. 판정은 호출자(트리)가 준다
+        — 엔진은 저장-무관 원칙 유지.
         """
         if weight <= 0:
             raise ValueError("link weight must be positive")
 
+        damp = (1.0 / max(1, len(kin))) if kin else 1.0
+
+        def _gain(earlier: str, base: float) -> None:
+            self.hub[earlier] += base * (damp if kin and earlier in kin else 1.0)
+
         earlier_linkers = self._linkers[node_id]
         if self.mode == "harmonic":
             for j, earlier in enumerate(earlier_linkers, start=1):
-                self.hub[earlier] += weight / j
+                _gain(earlier, weight / j)
         elif self.mode == "count":
             # 청구항 2: every earlier linker +weight per later link.
             for earlier in earlier_linkers:
-                self.hub[earlier] += weight
+                _gain(earlier, weight)
         else:  # "sum" — 청구항 3
             # Every earlier linker inherits this new linker's current hub.
             incoming_hub = self.hub[evaluator]
             for earlier in earlier_linkers:
-                self.hub[earlier] += weight * incoming_hub
+                _gain(earlier, weight * incoming_hub)
 
         self._linkers[node_id].append(evaluator)
         self.authority[node_id] += weight * (1.0 + self.hub[evaluator])
