@@ -888,3 +888,52 @@ def test_synthesize_orders_sources_by_lens_authority(client):
     if titles:                       # 근거가 잡혔다면 권위 높은 b가 앞
         first = titles[0]["title"] if isinstance(titles[0], dict) else titles[0]
         assert "둘" in str(first)
+
+
+# ── 노트 23 대대적 개선 (사다리 = 화면 + 티어드 라우팅) ─────────────────────
+
+def test_cheap_tier_routes_synthesize_not_generation(client):
+    """노트 19 §1 / 노트 20 축 E — 종합은 싼 층으로, 새 생성은 프런티어로.
+    셋을 같은 모델로 묶으면 모든 질의가 프런티어 비용을 무는 일반 AI 앱이 된다."""
+    from nightwish import unified as u
+    calls = {"cheap": 0}
+
+    def cheap_fn(q, p=""):
+        calls["cheap"] += 1
+        return "CHEAP-TIER 종합"
+
+    u.set_cheap_ai(cheap_fn, model="test-cheap")
+    try:
+        # 근거를 깔고 종합 → 싼 층이 호출된다
+        for i in range(2):
+            nid = client.post("/api/ask", json={"question": f"티어 주제 {i}", "author": "a"}
+                              ).json()["node"]["id"]
+            client.post("/api/mint", json={"account": f"tw{i}", "amount": 10})
+            client.post("/api/endorse", json={"account": f"tw{i}", "node_id": nid, "amount": 1})
+        r = client.post("/api/synthesize", json={"question": "티어 주제", "author": "z"}).json()
+        assert calls["cheap"] == 1 and "CHEAP-TIER" in r["node"]["answer"]
+        # 새 생성(ask)은 싼 층을 쓰지 않는다 — 프런티어(_ai_fn) 경로
+        client.post("/api/ask", json={"question": "완전히 새 질문", "author": "b"})
+        assert calls["cheap"] == 1
+        assert client.get("/api/health").status_code == 200
+    finally:
+        u._cheap_fn, u._cheap_model = None, ""      # 전역 복원
+
+
+def test_search_response_is_capped(client):
+    """검색 응답 상한 — 결과 뷰는 노드당 두루·신선도 계산을 포함하므로 캡이 효율."""
+    for i in range(30):
+        client.post("/api/ask", json={"question": f"캡 시험 주제 {i}", "author": "a"})
+    res = client.get("/api/search?q=캡 시험").json()
+    assert len(res) <= 24
+    res5 = client.get("/api/search?q=캡 시험&limit=5").json()
+    assert len(res5) <= 5
+
+
+def test_ask_reports_quota_left(client, monkeypatch):
+    """사다리 마지막 계단 UI용 — 생성 응답에 오늘 남은 쿼터를 알려준다."""
+    r = client.post("/api/ask", json={"question": "쿼터 표시 시험", "author": "q2"}).json()
+    assert r["quota_left"] is None                    # 쿼터 미설정 = 무제한
+    monkeypatch.setenv("NIGHTWISH_ASK_QUOTA", "5")
+    r2 = client.post("/api/ask", json={"question": "쿼터 표시 시험 둘", "author": "q2"}).json()
+    assert r2["quota_left"] == 4
