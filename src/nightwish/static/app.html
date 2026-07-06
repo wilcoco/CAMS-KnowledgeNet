@@ -214,10 +214,11 @@
     </div>
 
     <div class="tabpane" id="tab-search">
-      <textarea id="search" rows="3" placeholder="궁금한 것을 적고 Enter로 검색, 또는 AI에게 질문"></textarea>
+      <textarea id="search" rows="3" placeholder="궁금한 것을 적고 Enter — 기존 답(공짜)부터 찾고, 없으면 종합, 그래도 없으면 생성"></textarea>
       <div class="row">
-        <button id="btn-search" class="sec">검색</button>
-        <button id="btn-ask">AI에게 질문</button>
+        <button id="btn-search" title="1계단 — 이미 있는 답 재사용: 가장 싸고, 사람이 가려낸 답">🔎 기존 답 찾기</button>
+        <button id="btn-ask" class="sec" title="3계단(마지막) — 기존·종합으로 안 되면 프런티어 AI가 새 초안 생성">✨ 새 답 생성</button>
+        <label class="prov" style="margin-left:auto;cursor:pointer" title="사람이 가려낸(채택) 답을 위로"><input type="checkbox" id="sort-adopted" style="vertical-align:middle"> 채택 우선</label>
       </div>
       <div id="results"></div>
 
@@ -340,21 +341,37 @@ function adoptBadge(n){
 function nodeItem(n){
   const b = (n.is_query ? '<span class="badge query">질의</span>'
           : n.frozen ? '<span class="badge frozen">AI·동결</span>' : '')
-          + ' ' + adoptBadge(n);
+          + ' ' + adoptBadge(n)
+          + (n.freshness === 'stale' ? ' <span class="badge" title="1년 넘게 갱신 안 된 답">🔴</span>'
+             : n.freshness === 'aging' ? ' <span class="badge" title="90일 넘게 갱신 안 된 답">🟡</span>' : '')
+          + (n.contested ? ' <span class="badge" style="border-color:var(--fork);color:var(--fork)" title="정정/다른 답이 제기됨 — 견줘보세요">⚔️</span>' : '');
   const d = document.createElement('div');
   d.className = 'item';
   const wear = (n.staked||0) >= 12 ? '🔥' : (n.staked||0) >= 3 ? '' : (n.staked ? '' : '🌱');
+  const indep = (n.indep && n.walkers && n.indep < n.walkers)
+    ? ` · 두루 ${n.indep}` : '';
+  const conds = (n.conditions||[]).slice(0,2).map(cd=>`<span class="badge cond">${esc(cd)}</span>`).join(' ');
   d.innerHTML = `<div class="t">${esc(n.title)} ${b}</div>
-    <div class="m">${esc(n.author)} · 👣 ${n.staked}${wear?' '+wear:''} · 권위 ${n.authority}</div>`;
+    <div class="m">${esc(n.author)} · 👣 ${n.staked}${wear?' '+wear:''}${indep} · 권위 ${n.authority} ${conds}</div>`;
   d.onclick = ()=> openNode(n.id);
   return d;
 }
 
 async function doSearch(){
   const q = $('#search').value.trim();
-  const res = await api('GET', `/api/search?q=${encodeURIComponent(q)}&space=${space()}`);
+  let res = await api('GET', `/api/search?q=${encodeURIComponent(q)}&space=${space()}`);
+  if ($('#sort-adopted') && $('#sort-adopted').checked)
+    res = [...res].sort((a,b)=> (b.adopted?1:0)-(a.adopted?1:0) || b.authority-a.authority);
   const box = $('#results'); box.innerHTML = '';
-  if (!res.length) box.innerHTML = '<div class="prov">검색 결과 없음 — AI에게 질문해보세요.</div>';
+  if (!res.length){
+    box.innerHTML = '<div class="prov">아직 이 길을 걸은 사람이 없습니다 — 아래에서 새 답을 생성하면 당신이 첫 걸음입니다.</div>';
+  } else if (q){
+    const lead = document.createElement('div');
+    lead.className = 'prov';
+    const nAdopted = res.filter(n=>n.adopted).length;
+    lead.innerHTML = `♻️ 기존 길 <b>${res.length}</b>개${nAdopted?` (사람이 가려낸 답 ${nAdopted}개)`:''} — 재사용은 공짜이고, 이미 검증된 답입니다.`;
+    box.appendChild(lead);
+  }
   res.forEach(n => box.appendChild(nodeItem(n)));
   // 기존 길이 2개 이상이면 — "종합해서 답변할까요?" (내부 RAG: 근거 안에서만, 출처 자동 링크)
   if (q && res.length >= 2){
@@ -378,6 +395,19 @@ async function doSearch(){
     offer.appendChild(go);
     box.appendChild(offer);
   }
+  // 3계단(마지막): 그래도 없으면 생성 — 사다리의 바닥이 아니라 꼭대기(가장 비쌈)
+  if (q){
+    const last = document.createElement('div');
+    last.className = 'prov'; last.style.marginTop = '8px';
+    last.textContent = res.length ? '위 답들로 부족하면 —' : '';
+    const nb = document.createElement('button');
+    nb.className = 'sec'; nb.style.marginLeft = res.length ? '6px' : '0';
+    nb.textContent = '✨ 새 답 생성 (AI)';
+    nb.title = '프런티어 AI가 새 초안을 만듭니다 — 초안은 사람이 밟아야 채택됩니다';
+    nb.onclick = ()=> doAsk();
+    last.appendChild(nb);
+    box.appendChild(last);
+  }
 }
 
 async function doAsk(force){
@@ -389,6 +419,8 @@ async function doAsk(force){
       $('#btn-ask'));
     await refreshStat();
     renderNode(r.node);                 // 새 AI 답 또는 기존 채택본
+    if (r.stage === 'ai' && r.quota_left !== null && r.quota_left !== undefined)
+      toast(`✨ 새 답 생성 — 오늘 ${r.quota_left}건 남음 (재사용·검색·종합은 무제한)`);
     // 첫 질문 직후 한 번만: 혼자 두지 않기 — 동료 초대 넛지 (교정 3)
     if (!localStorage.getItem('nw_invite_nudged')){
       localStorage.setItem('nw_invite_nudged', '1');
@@ -404,7 +436,7 @@ async function doAsk(force){
     if (r.stage === 'existing'){        // 같은 질문의 채택본이 이미 있음 — 난립 방지
       const banner = document.createElement('div');
       banner.className = 'prov';
-      banner.innerHTML = '이미 <b>채택된 답</b>이 있어 보여드립니다. ';
+      banner.innerHTML = '♻️ 같은 질문에 <b>사람이 가려낸 답</b>(권위 최고본)이 이미 있어 재사용합니다 — 생성 0원. ';
       const btn = document.createElement('button');
       btn.className = 'sec'; btn.textContent = '그래도 새로 묻기';
       btn.onclick = ()=> doAsk(true);
@@ -1079,6 +1111,7 @@ $('#sel-q').addEventListener('keydown', e=>{
 // -- wiring ------------------------------------------------------------------
 $('#btn-search').onclick = doSearch;
 $('#btn-ask').onclick = ()=> doAsk();
+if ($('#sort-adopted')) $('#sort-adopted').onchange = doSearch;
 $('#search').addEventListener('keydown', e=>{
   if (e.key==='Enter' && !e.shiftKey){ e.preventDefault(); doSearch(); }
 });

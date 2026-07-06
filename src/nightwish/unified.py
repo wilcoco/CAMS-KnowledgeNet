@@ -55,6 +55,10 @@ def offline_answer(question: str, prompt: str = "") -> str:
 
 _ai_fn: Callable[[str, str], str] = offline_answer
 _ai_model: str = "offline-stub"
+#: 싼 층(노트 19 비용 사다리) — 종합·요약·조건추출처럼 *기존 본문을 엮는 쉬운
+#: 작업*은 프런티어가 필요 없다. 미설정이면 _ai_fn으로 폴백(동작 동일).
+_cheap_fn: Callable[[str, str], str] | None = None
+_cheap_model: str = ""
 
 
 def set_ai(fn: Callable[[str, str], str], *, model: str = "custom") -> None:
@@ -63,16 +67,32 @@ def set_ai(fn: Callable[[str, str], str], *, model: str = "custom") -> None:
     _ai_fn, _ai_model = fn, model
 
 
+def set_cheap_ai(fn: Callable[[str, str], str], *, model: str = "cheap") -> None:
+    """싼 층 백엔드 설치 — 종합(synthesize)·URL 요약·조건 추출이 이리로 라우팅.
+
+    새 생성(ask 초안·후속·펼침)은 계속 프런티어(set_ai) — 셋을 같은 모델로
+    묶으면 모든 질의가 프런티어 비용을 무는 일반 AI 앱이 된다(노트 19 §1).
+    """
+    global _cheap_fn, _cheap_model
+    _cheap_fn, _cheap_model = fn, model
+
+
 def configure_ai() -> bool:
     """Activate the Claude backend if ``NIGHTWISH_ENABLE_LLM`` + key are present."""
     if os.environ.get("NIGHTWISH_ENABLE_LLM", "").lower() not in ("1", "true", "yes"):
         return False
     try:
-        from nightwish.llm import DEFAULT_MODEL, make_draft_fn
+        from nightwish.llm import DEFAULT_MODEL, claude_draft, make_draft_fn
 
         draft = make_draft_fn()
         if draft is not None:
             set_ai(draft, model=DEFAULT_MODEL)
+            cheap_model = os.environ.get(
+                "NIGHTWISH_CHEAP_MODEL", "claude-haiku-4-5-20251001").strip()
+            if cheap_model:
+                set_cheap_ai(
+                    lambda q, p="", _m=cheap_model: claude_draft(q, p, model=_m),
+                    model=cheap_model)
             return True
     except Exception:
         pass
@@ -105,11 +125,22 @@ def _ask_ai(question: str, prompt: str = "") -> str:
         return offline_answer(question, prompt)
 
 
+def _cheap_ai(question: str, prompt: str = "") -> str:
+    """싼 층 호출(종합·요약·조건추출) — 미설정이면 프런티어로 폴백."""
+    if _cheap_fn is not None:
+        try:
+            return _cheap_fn(question, prompt)
+        except Exception:
+            pass
+    return _ask_ai(question, prompt)
+
+
 def _ai_status() -> dict:
     """Whether the real LLM is active — so the UI can show stub vs Claude."""
     active = _ai_model != "offline-stub"
     return {
         "model": _ai_model,
+        "cheap_model": _cheap_model or _ai_model,
         "active": active,
         "hint": "" if active else
                 "오프라인 스텁 — 실제 LLM을 켜려면 NIGHTWISH_ENABLE_LLM=1 + ANTHROPIC_API_KEY",
@@ -130,6 +161,16 @@ def _gen_quota() -> int | None:
         return int(raw) if raw else None
     except ValueError:
         return None
+
+
+def _quota_left(svc: "UnifiedService", author: str) -> int | None:
+    """오늘 남은 생성 횟수 — 쿼터 미설정이면 None(무제한)."""
+    quota = _gen_quota()
+    if quota is None:
+        return None
+    from datetime import date
+    used = svc._gen_counts.get((author, date.today().isoformat()), 0)
+    return max(0, quota - used)
 
 
 def _charge_gen_quota(svc: "UnifiedService", author: str) -> None:
@@ -195,7 +236,7 @@ def _summarize_url(url: str) -> str | None:
     prompt = ("너는 웹페이지 본문을 요약한다. 아래 본문에 **실제로 있는 내용만** "
               "근거로, 핵심을 한국어 3~5문장으로 요약하라. 본문에 없는 것은 절대 "
               "지어내지 말 것.")
-    summary = _ask_ai(f"[{url}]\n\n{body}", prompt)
+    summary = _cheap_ai(f"[{url}]\n\n{body}", prompt)   # 요약 = 싼 층
     return (summary or "").strip() or None
 
 
@@ -852,10 +893,12 @@ def create_app() -> FastAPI:
             return roots
 
     @app.get("/api/search")
-    def search(q: str = "", space: str = "public"):
+    def search(q: str = "", space: str = "public", limit: int = 24):
         svc = get_service()
+        limit = max(1, min(limit, 50))    # 뷰 계산(두루·신선도)·페이로드 상한
         with svc.reading():
-            return [_node_view(svc, n.id, space) for n in svc.tree.search(q, space)]
+            return [_node_view(svc, n.id, space)
+                    for n in svc.tree.search(q, space)[:limit]]
 
     @app.get("/api/nodes/{node_id}")
     def get_node(node_id: str, space: str = "public"):
@@ -932,7 +975,8 @@ def create_app() -> FastAPI:
             svc.tree.mark_answered(nid, _ai_model)
             return {"stage": "ai",
                     "node": _node_view(svc, nid, body.space, full=True),
-                    "related": related}
+                    "related": related,
+                    "quota_left": _quota_left(svc, body.author)}
 
     @app.post("/api/nodes")
     def create_node(body: PageBody):
@@ -990,7 +1034,7 @@ def create_app() -> FastAPI:
                   "내용은 지어내지 말고, 모자란 부분은 '근거 부족'이라고 밝혀라. "
                   "주장 뒤에 [[제목]] 형식으로 출처를 표기하라.\n\n"
                   + "\n\n".join(src_texts))
-        text = _ask_ai(body.question, prompt)
+        text = _cheap_ai(body.question, prompt)   # 종합 = 싼 층 (노트 19 §1)
         # 출처를 결정적으로 박는다 — 모델이 인용을 빠뜨려도 위키링크 자동 연결 보장
         text = (text.rstrip() + "\n\n— 📚 근거 (기존 답):\n"
                 + "\n".join(f"- [[{t}]]" for t in titles))
@@ -1187,7 +1231,7 @@ def create_app() -> FastAPI:
             if n is None or n.is_stub:
                 raise HTTPException(404, f"node {node_id!r} not found")
             text = f"{n.question}\n{n.answer}"[:1500]
-        raw = _ask_ai(
+        raw = _cheap_ai(
             "아래 답이 유효한 *적용 조건*(환경/버전/플랜/범위 한정)을 찾아라. "
             "본문에 명시된 것만, 0~3개, 한 줄에 하나, 각 20자 이내 명사구로. "
             "조건이 없으면 '없음'만 출력.\n\n" + text)
@@ -1220,7 +1264,7 @@ def create_app() -> FastAPI:
         reason = "짧은 명사구 — 보편 개념일 수 있음" if short else "문장형 — 이 맥락의 설명으로 보임"
         if _ai_model != "offline-stub":          # refine with a real LLM if active
             try:
-                ans = _ask_ai(
+                ans = _cheap_ai(
                     "다음 구절이 어디서나 같은 뜻의 '보편 개념'이면 concept, 특정 맥락의 "
                     f"설명이면 unfold — 한 단어로만 답하라.\n구절: «{span}»\n맥락: {body.context[:200]}"
                 ).strip().lower()
