@@ -937,3 +937,52 @@ def test_ask_reports_quota_left(client, monkeypatch):
     monkeypatch.setenv("NIGHTWISH_ASK_QUOTA", "5")
     r2 = client.post("/api/ask", json={"question": "쿼터 표시 시험 둘", "author": "q2"}).json()
     assert r2["quota_left"] == 4
+
+
+# ── 노트 24 잔여 완결 (BYOK · 자기발자국 · 유효 재확인) ─────────────────────
+
+def test_human_authorship_gets_auto_self_footprint(client):
+    """노트 13 잔여 — 사람이 만든 기여는 저자가 첫 발자국(가중 1)으로 자동 기록.
+    AI 초안(ask)엔 없음. 남이 따라 밟으면 저자의 안목이 검증된다."""
+    from nightwish import unified as u
+    svc = u.get_service()
+    client.post("/api/nodes", json={"title": "사람이 쓴 페이지", "body": "직접 정리한 내용",
+                                    "author": "writer"})
+    nid = "사람이-쓴-페이지"
+    assert svc.tree.scoring.linker_position("writer", nid) == 1
+    # AI 초안엔 자기발자국 없음 — 질문자는 재료를 띄웠을 뿐
+    aid = client.post("/api/ask", json={"question": "발자국 없는 초안", "author": "asker"}
+                      ).json()["node"]["id"]
+    assert svc.tree.scoring.linker_position("asker", aid) is None
+    # 남이 따라 밟으면 저자 안목 검증(허브 적립)
+    client.post("/api/mint", json={"account": "fw", "amount": 10})
+    client.post("/api/endorse", json={"account": "fw", "node_id": nid, "amount": 1})
+    assert svc.tree.scoring.hub_of("writer") > 0
+
+
+def test_reconfirm_resets_freshness_clock(client):
+    """노트 20 §3-6 — '아직 유효함' 탭 한 번 = 사람의 재검 판정 → 시계 리셋."""
+    from nightwish import unified as u
+    nid = client.post("/api/ask", json={"question": "낡을 답", "author": "a"}).json()["node"]["id"]
+    client.post("/api/mint", json={"account": "w9", "amount": 10})
+    client.post("/api/endorse", json={"account": "w9", "node_id": nid, "amount": 1})
+    u.get_service().tree.nodes[nid].answered_at = "2024-01-01T00:00:00+00:00"
+    assert client.get(f"/api/nodes/{nid}").json()["freshness"] == "stale"
+    r = client.post(f"/api/nodes/{nid}/reconfirm", json={"author": "w9"}).json()
+    assert r["freshness"] == "fresh" and not r["recheck"]
+
+
+def test_byok_key_bypasses_quota_without_server_storage(client, monkeypatch):
+    """노트 19 ③ — 쿼터 소진 후에도 본인 키(BYOK)면 생성 가능(본인 비용).
+    키는 요청 안에서만 쓰이고 서버 상태에 남지 않는다."""
+    monkeypatch.setenv("NIGHTWISH_ASK_QUOTA", "1")
+    assert client.post("/api/ask", json={"question": "쿼터 소진용", "author": "bk"}).status_code == 200
+    r = client.post("/api/ask", json={"question": "쿼터 초과 질문", "author": "bk"})
+    assert r.status_code == 429
+    r2 = client.post("/api/ask", json={"question": "쿼터 초과 질문", "author": "bk",
+                                       "api_key": "sk-test-own-key"})
+    assert r2.status_code == 200 and r2.json()["stage"] == "ai"
+    import json as _json
+    from nightwish import unified as u
+    snap = _json.dumps(u.get_service().tree.to_json(), ensure_ascii=False)
+    assert "sk-test-own-key" not in snap

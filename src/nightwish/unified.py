@@ -125,6 +125,24 @@ def _ask_ai(question: str, prompt: str = "") -> str:
         return offline_answer(question, prompt)
 
 
+def _ask_ai_byok(question: str, prompt: str, key: str) -> str:
+    """BYOK 생성 — 사용자 키로 1회 호출(저장 없음). 실패 시 오프라인 폴백."""
+    try:
+        from nightwish.llm import claude_draft
+        return claude_draft(question, prompt, api_key=key)
+    except Exception:
+        return offline_answer(question, prompt)
+
+
+def _self_footprint(svc: "UnifiedService", node_id: str, author: str) -> None:
+    """자동 자기발자국(노트 13 잔여): *사람이 만든* 기여는 저자가 첫 발자국
+    (가중 1)으로 자동 기록 — "자기 것 인도스는 귀찮다"를 시스템이 대신한다.
+    AI 초안엔 없음(재료일 뿐). 뒤에 남이 따라 밟으면 저자의 안목도 검증된다."""
+    sc = svc.tree.scoring
+    if author and author != "AI" and sc.linker_position(author, node_id) is None:
+        sc.link(author, node_id, weight=1.0)
+
+
 def _cheap_ai(question: str, prompt: str = "") -> str:
     """싼 층 호출(종합·요약·조건추출) — 미설정이면 프런티어로 폴백."""
     if _cheap_fn is not None:
@@ -464,6 +482,9 @@ class AskBody(BaseModel):
     author: str = Field(min_length=1)
     space: str = "public"
     force: bool = False  # True면 동일 채택본이 있어도 새 답을 강제 생성
+    #: BYOK(노트 19 ③): 쿼터를 넘긴 사용자가 자기 키로 계속 생성. 이 키는 이
+    #: 요청의 생성 1회에만 쓰이고 서버에 저장되지 않는다.
+    api_key: str = ""
 
 
 class PageBody(BaseModel):
@@ -962,11 +983,13 @@ def create_app() -> FastAPI:
                                 "node": _node_view(svc, best.id, body.space,
                                                    full=True),
                                 "related": related}
-        _charge_gen_quota(svc, body.author)   # 생성만 게이트 — 재사용은 위에서 무료
-        # The AI draft is a (possibly multi-second) network call — do it WITHOUT
-        # holding the lock, so the rest of the app (status poll, other users)
-        # isn't frozen while a generation is in flight.
-        text = _ask_ai(body.question)
+        if body.api_key:                      # BYOK — 본인 키·본인 비용, 쿼터 미차감
+            text = _ask_ai_byok(body.question, "", body.api_key)
+        else:
+            _charge_gen_quota(svc, body.author)   # 생성만 게이트 — 재사용은 무료
+            # The AI draft is a (possibly multi-second) network call — do it
+            # WITHOUT holding the lock (status poll, other users keep moving).
+            text = _ask_ai(body.question)
         with svc.writing():
             nid = svc._new_id(body.question)
             # The concept (ROOT) is always public commons; the asker's group
@@ -998,6 +1021,7 @@ def create_app() -> FastAPI:
             if existing is not None:           # promote an empty stub → real page
                 del svc.tree.nodes[nid]
             svc.tree.add_root(nid, body.title, body.body, body.author)
+            _self_footprint(svc, nid, body.author)
             return _node_view(svc, nid, body.space, full=True)
 
     @app.post("/api/synthesize")
@@ -1111,6 +1135,7 @@ def create_app() -> FastAPI:
                     # 확정이 아니라 사람 행위의 기록). 반증 근거는 본문이 담는다.
                     with contextlib.suppress(OntologyError):
                         svc.tree.relate(fork_id, node_id, "대립", body.author)
+                    _self_footprint(svc, fork_id, body.author)
                 elif kind == "followup":
                     qid = svc._child_id(node_id)
                     svc.tree.contribute(qid, node_id, body.author, answer="",
@@ -1133,9 +1158,11 @@ def create_app() -> FastAPI:
                 else:  # comment / 보강
                     if not body.body.strip():
                         raise HTTPException(400, "의견 내용이 필요합니다")
-                    svc.tree.contribute(svc._child_id(node_id), node_id, body.author,
+                    cid = svc._child_id(node_id)
+                    svc.tree.contribute(cid, node_id, body.author,
                                         body.body, stake=0.0, value_add=False,
                                         space=body.space)
+                    _self_footprint(svc, cid, body.author)
             except OntologyError as e:
                 raise HTTPException(400, str(e))
             return _node_view(svc, node_id, body.space, full=True)
@@ -1209,6 +1236,22 @@ def create_app() -> FastAPI:
                 raise HTTPException(400, str(e))
             return {"node": node_id, "target": body.target,
                     "rels": {t: len(u) for t, u in rels.items()}}
+
+    @app.post("/api/nodes/{node_id}/reconfirm")
+    def reconfirm(node_id: str, body: FillBody):
+        """"아직 유효함" — 오래된 답을 사람이 재검하고 시계를 리셋(노트 20 §3-6).
+        자동 갱신이 아니라 탭 한 번의 판정. 폐기는 여전히 정정(fork)으로만."""
+        svc = get_service()
+        with svc.writing():
+            n = svc.tree.nodes.get(node_id)
+            if n is None or n.is_stub:
+                raise HTTPException(404, f"node {node_id!r} not found")
+            if n.answered_at:
+                from datetime import datetime, timezone
+                n.answered_at = datetime.now(
+                    timezone.utc).isoformat(timespec="seconds")
+            svc.tree.bump()
+            return _node_view(svc, node_id, body.space, full=True)
 
     @app.post("/api/nodes/{node_id}/conditions")
     def set_conditions(node_id: str, body: CondBody):
@@ -1378,6 +1421,8 @@ def create_app() -> FastAPI:
                                       model=_ai_model if body.ai else "")
             except OntologyError as e:
                 raise HTTPException(400, str(e))
+            if not body.ai:
+                _self_footprint(svc, node_id, body.author)
             return _node_view(svc, node_id, body.space, full=True)
 
     @app.get("/api/scores")

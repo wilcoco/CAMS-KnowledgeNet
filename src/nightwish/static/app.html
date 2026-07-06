@@ -34,7 +34,11 @@
   .crumbs { font-size:11px; color:var(--mut); margin-bottom:6px; }
   .crumbs a { color:var(--link); cursor:pointer; }
   @media (max-width:880px){ .grid { grid-template-columns:1fr; height:auto; }
-    .pane { flex-basis:88vw; } }
+    .pane { flex-basis:88vw; }
+    /* 사다리 압축(노트 23): 좁은 화면에선 버튼 줄바꿈·배지 축소 — 계단은 유지 */
+    .row { flex-wrap:wrap; }
+    .badge { font-size:.72em; padding:1px 5px; }
+    .item .m { font-size:.78em; } }
   /* LEFT: Windsurf-style tabs (검색 / 위치) */
   .tabs { display:flex; gap:2px; border-bottom:1px solid var(--line);
           margin:-12px -12px 10px; padding:0 8px; }
@@ -415,7 +419,8 @@ async function doAsk(force){
   if (!q) return;
   try {
     const r = await withBusy(force ? 'AI가 새 답변을 생성하는 중…' : 'AI가 답변을 생성하는 중…',
-      ()=> api('POST','/api/ask',{question:q, author:me(), space:space(), force:!!force}),
+      ()=> api('POST','/api/ask',{question:q, author:me(), space:space(), force:!!force,
+                                  api_key: localStorage.getItem('nw_byok') || ''}),
       $('#btn-ask'));
     await refreshStat();
     renderNode(r.node);                 // 새 AI 답 또는 기존 채택본
@@ -451,7 +456,19 @@ async function doAsk(force){
       box.appendChild(h);
       r.related.forEach(n => box.appendChild(nodeItem(n)));
     }
-  } catch(e){ alert('AI 질문 실패: ' + e.message); }
+  } catch(e){
+    if ((e.message||'').includes('쿼터')){
+      // 사다리 밖 마지막 문 — 본인 키(BYOK)로 계속. 키는 브라우저에만 저장.
+      const k = prompt('오늘의 무료 생성이 끝났어요. 재사용·검색·종합은 계속 무제한!\n' +
+                       '계속 생성하려면 본인 Anthropic API 키를 넣으세요 (브라우저에만 저장, 서버 저장 없음):');
+      if (k && k.trim()){
+        localStorage.setItem('nw_byok', k.trim());
+        toast('🔑 내 키로 생성합니다 — 비용은 내 계정으로');
+        return doAsk(force);
+      }
+    }
+    alert('AI 질문 실패: ' + e.message);
+  }
 }
 
 async function loadQueries(){
@@ -748,7 +765,9 @@ function fillPane(n, c){
   const freshBadge = n.freshness === 'stale' ? '<span class="badge" title="1년 넘게 갱신 안 된 답">🔴 오래됨</span>'
     : n.freshness === 'aging' ? '<span class="badge" title="90일 넘게 갱신 안 된 답">🟡 묵음</span>' : '';
   const recheckHint = n.recheck ? `
-    <div class="prov draft-hint">🕰️ 이 채택답은 오래됐어요 — 아직 유효한가요? 맞으면 그대로 두고, 낡았다면 <b>정정</b>으로 갱신해 주세요 (지식은 썩습니다 — 판정은 사람이).</div>` : '';
+    <div class="prov draft-hint">🕰️ 이 채택답은 오래됐어요 — 아직 유효한가요?
+      <button class="sec btn-revalid" title="재검 결과 여전히 맞다 — 신선도 시계를 리셋합니다">✅ 아직 유효함</button>
+      낡았다면 <b>정정</b>으로 갱신해 주세요 (지식은 썩습니다 — 판정은 사람이).</div>` : '';
   // 정정 제기됨(노트 21): 이 답에 다른 답·정정이 달림 — 재검은 사람이
   const contestedBadge = n.contested ? '<span class="badge" style="border-color:var(--fork);color:var(--fork)" title="이 답에 정정/다른 답이 제기되어 있습니다 — 아래 스레드에서 견줘보세요">⚔️ 정정 제기됨</span>' : '';
   // 적용 조건 칩(노트 18 P2): AI가 제안, 사람이 탭으로 확정/제거
@@ -824,6 +843,14 @@ function fillPane(n, c){
     document.body.appendChild(pop);
     setTimeout(()=> document.addEventListener('click', ()=> pop.remove(), {once:true}));
   });
+  const rv = c.querySelector('.btn-revalid');
+  if (rv) rv.onclick = async ()=>{
+    try{
+      await api('POST', `/api/nodes/${encodeURIComponent(n.id)}/reconfirm`, {author: me()});
+      toast('✅ 재검 완료 — 이 답의 신선도 시계가 리셋됐습니다');
+      refreshPane(c);
+    }catch(e){ alert(e.message); }
+  };
   // 조건 패싯(노트 18 P2): × 제거 / ＋조건 → AI 후보 → 탭으로 확정
   c.querySelectorAll('.cond-x').forEach(x => x.onclick = async (ev)=>{
     ev.stopPropagation();
