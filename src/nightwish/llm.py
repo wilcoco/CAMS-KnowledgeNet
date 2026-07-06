@@ -31,11 +31,15 @@ WIKI_SYSTEM = (
 )
 
 
-def claude_draft(title: str, prompt: str, *, model: str = DEFAULT_MODEL) -> str:
-    """Draft a wiki page with Claude. Returns markdown text."""
+def claude_draft(title: str, prompt: str, *, model: str = DEFAULT_MODEL,
+                 api_key: str | None = None) -> str:
+    """Draft a wiki page with Claude. Returns markdown text.
+
+    ``api_key`` — BYOK(노트 19): 사용자 키로 이 호출 1회만. 저장하지 않는다.
+    """
     import anthropic  # lazy — only needed when the backend is active
 
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
     ask = prompt.strip() or f"'{title}' 문서를 작성해줘."
     user = (
         f"문서 제목: {title}\n\n요청: {ask}\n\n"
