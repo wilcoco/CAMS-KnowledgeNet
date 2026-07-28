@@ -1016,5 +1016,5 @@ def test_ego_endpoint_expands_by_depth(client):
     assert ids1 < ids2                       # 깊이 2가 순증가
     assert "에고-개념" in ids2                 # 보강(1단계)의 링크(2단계)까지
     assert all("label" in e for e in d2["edges"])
-    # depth는 1~3으로 클램프
-    assert client.get(f"/api/nodes/{root}/ego?depth=9").json()["depth"] == 3
+    # depth는 1~6으로 클램프
+    assert client.get(f"/api/nodes/{root}/ego?depth=9").json()["depth"] == 6
