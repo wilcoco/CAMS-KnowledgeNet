@@ -18,15 +18,19 @@
   header .spacer { flex:1; }
   input, textarea, select { background:#0c0e13; color:var(--fg);
     border:1px solid var(--line); border-radius:6px; padding:7px 9px; font:inherit; }
-  .grid { display:grid; grid-template-columns:340px 1fr 270px; gap:0;
-          height:calc(100vh - 51px); }
+  .grid { display:grid;
+          grid-template-columns:var(--left-w,340px) 5px 1fr 5px var(--right-w,300px);
+          gap:0; height:calc(100vh - 51px); }
+  /* 섹션 폭 조절 스플리터 — 끌어서 좌/우 폭 조정(더블클릭=기본값) */
+  .split { cursor:col-resize; background:var(--line); opacity:.5; touch-action:none; }
+  .split:hover, .split.on { opacity:1; background:var(--acc); }
   aside { overflow:auto; padding:12px; }
   aside { border-right:1px solid var(--line); }
   aside.right { border-right:0; border-left:1px solid var(--line); }
   /* CENTER = horizontal stack of sliding panes (Roam/Matuschak식): 링크를 따라가면
      우측으로 새 패널이 쌓여 읽기 흐름이 끊기지 않는다. */
   .center { overflow-x:auto; overflow-y:hidden; padding:0; display:flex; align-items:stretch; }
-  .pane { flex:1 1 clamp(340px, 44vw, 560px); max-width:900px; overflow-y:auto; padding:12px 14px;
+  .pane { flex:1 1 clamp(340px, 44vw, 560px); overflow-y:auto; padding:12px 14px;
           border-right:1px solid var(--line); position:relative; }
   .pane.active { box-shadow: inset 3px 0 0 var(--acc); }
   .pane-close { position:absolute; top:8px; right:10px; background:none; color:var(--mut);
@@ -34,6 +38,7 @@
   .crumbs { font-size:11px; color:var(--mut); margin-bottom:6px; }
   .crumbs a { color:var(--link); cursor:pointer; }
   @media (max-width:880px){ .grid { grid-template-columns:1fr; height:auto; }
+    .split { display:none; }
     .pane { flex-basis:88vw; }
     /* 사다리 압축(노트 23): 좁은 화면에선 버튼 줄바꿈·배지 축소 — 계단은 유지 */
     .row { flex-wrap:wrap; }
@@ -242,11 +247,13 @@
   </aside>
 
   <!-- CENTER: node detail + recursive thread (빈 상태 = 온보딩, init()이 채움) -->
+  <div class="split" id="split-l" title="끌어서 왼쪽 폭 조절 · 더블클릭=기본"></div>
   <section class="center" id="center">
     <div class="empty">…</div>
   </section>
 
   <!-- RIGHT: my profile (territory share) + scores + economy -->
+  <div class="split" id="split-r" title="끌어서 오른쪽 폭 조절 · 더블클릭=기본"></div>
   <aside class="right">
     <div class="tabs">
       <button class="tab active" data-rtab="map" title="지금 보는 답의 연결 — 드래그·휠줌·팬, 클릭=이동">🕸 연결 지도</button>
@@ -600,7 +607,21 @@ function renderEgo(n){
           <title>${esc(C.t)} (현재)</title></g>`;
   };
 
-  let heat = 1;
+  let heat = 1, userView = false;
+  const fit = ()=>{                 // 내용 전체를 뷰포트에 맞춤(수동 조작 전까지)
+    if (userView) return;
+    let x0=1e9, y0=1e9, x1=-1e9, y1=-1e9;
+    for (const p of [C, ...N]){
+      x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x);
+      y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y);
+    }
+    x0 -= 70; x1 += 70; y0 -= 45; y1 += 60;      // 라벨 여백
+    const k = Math.min(W/(x1-x0), H/(y1-y0), 1.35);
+    sc = k;
+    tx = (W - (x1-x0)*k)/2 - x0*k;
+    ty = (H - (y1-y0)*k)/2 - y0*k;
+    applyView();
+  };
   const step = ()=>{
     const all = [C, ...N];
     for (const p of N){
@@ -619,7 +640,7 @@ function renderEgo(n){
       p.x += p.vx*heat; p.y += p.vy*heat;
     }
   };
-  const loop = ()=>{ step(); draw(); heat *= 0.99;
+  const loop = ()=>{ step(); draw(); fit(); heat *= 0.99;
     if (heat > 0.04){ EGO.raf = requestAnimationFrame(loop); }
     else EGO.running = false; };
   const wake = (h)=>{ heat = Math.max(heat, h);
@@ -634,7 +655,7 @@ function renderEgo(n){
     const g = ev.target.closest('.ego-n'); moved = 0;
     if (g){ dragN = N.find(x=>x.id===g.dataset.gid);
       if (dragN){ dragN.drag = true; mode = 'node'; } }
-    else mode = 'pan';
+    else { mode = 'pan'; userView = true; }
     svg.setPointerCapture(ev.pointerId);
   });
   svg.addEventListener('pointermove', ev=>{
@@ -651,6 +672,7 @@ function renderEgo(n){
   });
   svg.addEventListener('wheel', ev=>{
     ev.preventDefault();
+    userView = true;
     const want = sc * (ev.deltaY < 0 ? 1.12 : 0.9);
     const next = Math.min(3, Math.max(0.3, want));
     const k = next / sc;                    // 클램프 반영한 *유효* 배율 — 초점 고정
@@ -1294,6 +1316,47 @@ $('#sel-q').addEventListener('keydown', e=>{
 $('#btn-search').onclick = doSearch;
 $('#btn-ask').onclick = ()=> doAsk();
 if ($('#sort-adopted')) $('#sort-adopted').onchange = doSearch;
+// 섹션 폭 조절(스플리터): 끌기=조정, 더블클릭=기본값. 브라우저에 기억.
+(function(){
+  const root = document.documentElement;
+  const saved = k => localStorage.getItem(k);
+  if (saved('nw_left_w'))  root.style.setProperty('--left-w',  saved('nw_left_w'));
+  if (saved('nw_right_w')) root.style.setProperty('--right-w', saved('nw_right_w'));
+  const wire = (el, varName, key, fromRight, min, max, def) => {
+    if (!el) return;
+    el.addEventListener('pointerdown', ev => {
+      ev.preventDefault(); el.classList.add('on');
+      el.setPointerCapture(ev.pointerId);
+      const move = e => {
+        const w = Math.min(max, Math.max(min,
+          fromRight ? window.innerWidth - e.clientX : e.clientX));
+        root.style.setProperty(varName, w + 'px');
+      };
+      const up = e => {
+        el.classList.remove('on');
+        el.removeEventListener('pointermove', move);
+        el.removeEventListener('pointerup', up);
+        localStorage.setItem(key,
+          getComputedStyle(root).getPropertyValue(varName).trim());
+        renderEgo(EGO.data);            // 우측 폭이 바뀌면 지도 다시 그리기
+      };
+      el.addEventListener('pointermove', move);
+      el.addEventListener('pointerup', up);
+    });
+    el.addEventListener('dblclick', () => {
+      root.style.setProperty(varName, def);
+      localStorage.removeItem(key);
+      renderEgo(EGO.data);
+    });
+  };
+  wire($('#split-l'), '--left-w',  'nw_left_w',  false, 220, 620, '340px');
+  wire($('#split-r'), '--right-w', 'nw_right_w', true,  220, 720, '300px');
+})();
+
+let _egoRz;
+window.addEventListener('resize', ()=>{
+  clearTimeout(_egoRz); _egoRz = setTimeout(()=> renderEgo(EGO.data), 200);
+});
 // 우측 탭(지도/나의 기록/점수판) — 지도 탭으로 돌아오면 마지막 노드로 재렌더
 document.querySelectorAll('[data-rtab]').forEach(b => b.onclick = ()=>{
   document.querySelectorAll('[data-rtab]').forEach(x=> x.classList.toggle('active', x===b));
