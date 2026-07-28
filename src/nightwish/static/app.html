@@ -211,6 +211,7 @@
   <span class="m" id="layer-hint" style="color:var(--acc)"></span>
   <label class="m">나</label>
   <input id="me" value="anon" style="width:90px" />
+  <span id="auth-box"></span>
   <button class="sec" id="btn-reset" title="모든 노드·평가 삭제 (되돌릴 수 없음)">전체 삭제</button>
 </header>
 
@@ -1476,6 +1477,48 @@ document.querySelectorAll('.ego-d').forEach(b => b.onclick = ()=>{
     clearTimeout(t); t = setTimeout(()=> renderEgo(EGO.data), 120);
   };
 })();
+// 구글 로그인 (켜져 있을 때만): 신원=검증 이메일 — 이름칸은 잠긴다.
+(async function initAuth(){
+  let cfg; try{ cfg = await api('GET','/api/auth/config'); }catch(e){ return; }
+  const box = $('#auth-box'); if (!cfg.enabled || !box) return;
+  $('#me').readOnly = true;
+  $('#me').title = '구글 로그인 신원 — 발자국·안목이 이 신원에 쌓입니다';
+  const paint = (user)=>{
+    if (user){
+      $('#me').value = user.email;
+      localStorage.setItem('nw_me', user.email);
+      box.innerHTML = `<span class="prov">✓ ${esc(user.name || user.email)}</span>
+        <button class="sec" id="btn-logout">로그아웃</button>`;
+      $('#btn-logout').onclick = async ()=>{
+        await api('POST','/api/auth/logout',{});
+        location.reload();
+      };
+    } else {
+      $('#me').value = '';
+      box.innerHTML = `<span id="gsi-btn"></span>`;
+      const s = document.createElement('script');
+      s.src = 'https://accounts.google.com/gsi/client'; s.async = true;
+      s.onload = ()=>{
+        google.accounts.id.initialize({
+          client_id: cfg.client_id,
+          callback: async (resp)=>{
+            try{
+              const r = await api('POST','/api/auth/google',{credential: resp.credential});
+              paint(r.user);
+              toast(`👋 ${r.user.name || r.user.email} — 발자국이 이 신원으로 쌓입니다`);
+              refreshStat(); loadScores();
+            }catch(e){ alert('로그인 실패: ' + e.message); }
+          },
+        });
+        google.accounts.id.renderButton($('#gsi-btn'),
+          {theme:'outline', size:'medium', text:'signin_with'});
+      };
+      document.head.appendChild(s);
+    }
+  };
+  try{ paint((await api('GET','/api/auth/me')).user); }catch(e){ paint(null); }
+})();
+
 // 우측 탭(지도/나의 기록/점수판) — 지도 탭으로 돌아오면 마지막 노드로 재렌더
 document.querySelectorAll('[data-rtab]').forEach(b => b.onclick = ()=>{
   document.querySelectorAll('[data-rtab]').forEach(x=> x.classList.toggle('active', x===b));

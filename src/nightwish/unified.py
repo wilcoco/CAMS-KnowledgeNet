@@ -29,8 +29,8 @@ from html import unescape
 from pathlib import Path
 from typing import Callable, Optional
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -173,6 +173,73 @@ def _ai_active() -> bool:
 # 무료 기본 = 재사용·검색·평가·종합(쿼터 없음). *새 생성*만 하루 N건으로 막는다
 # — 스팸 100건이 전부 초안을 만든 실측(노트 21 §3-③)의 방어. 기본은 꺼짐(개발/
 # 오프라인); 실LLM 배포에서 NIGHTWISH_ASK_QUOTA=30 처럼 켠다.
+# --- 구글 로그인 (선택적 — GOOGLE_CLIENT_ID 있으면 켜짐) --------------------- #
+# 신원 = 구글 검증 이메일. 켜지면 모든 쓰기(POST /api/*)에 로그인 필수 +
+# 타인 명의(author/account) 차단 — 시빌·명의도용의 1차 방어선. 꺼져 있으면
+# 종전대로 자유 이름(개발/데모). 세션은 HMAC 서명 쿠키(서버 저장 없음).
+import base64
+import hashlib
+import hmac
+import secrets
+import time as _time
+
+_google_verifier: Callable[[str, str], dict | None] | None = None
+_session_secret = os.environ.get("NIGHTWISH_SECRET") or secrets.token_hex(32)
+
+
+def set_google_verifier(fn: Callable[[str, str], dict | None]) -> None:
+    """테스트/대체 IdP용 검증기 주입 — fn(credential, client_id) → claims|None."""
+    global _google_verifier
+    _google_verifier = fn
+
+
+def _auth_client_id() -> str:
+    return os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+
+
+def _auth_enabled() -> bool:
+    return bool(_auth_client_id())
+
+
+def _verify_google(credential: str) -> dict | None:
+    if _google_verifier is not None:
+        return _google_verifier(credential, _auth_client_id())
+    try:
+        from google.auth.transport import requests as grequests
+        from google.oauth2 import id_token
+        claims = id_token.verify_oauth2_token(
+            credential, grequests.Request(), _auth_client_id())
+        return claims
+    except Exception:
+        return None
+
+
+def _sign_session(user: dict) -> str:
+    payload = base64.urlsafe_b64encode(json.dumps(
+        {"u": user, "exp": int(_time.time()) + 30 * 86400},
+        ensure_ascii=False).encode()).decode()
+    sig = hmac.new(_session_secret.encode(), payload.encode(),
+                   hashlib.sha256).hexdigest()
+    return f"{payload}.{sig}"
+
+
+def _read_session(cookie: str | None) -> dict | None:
+    if not cookie or "." not in cookie:
+        return None
+    payload, sig = cookie.rsplit(".", 1)
+    want = hmac.new(_session_secret.encode(), payload.encode(),
+                    hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, want):
+        return None
+    try:
+        data = json.loads(base64.urlsafe_b64decode(payload.encode()))
+    except Exception:
+        return None
+    if data.get("exp", 0) < _time.time():
+        return None
+    return data.get("u")
+
+
 def _gen_quota() -> int | None:
     raw = os.environ.get("NIGHTWISH_ASK_QUOTA", "").strip()
     try:
@@ -737,6 +804,65 @@ def create_app() -> FastAPI:
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
         return response
+
+    @app.get("/api/auth/config")
+    def auth_config():
+        return {"enabled": _auth_enabled(), "client_id": _auth_client_id()}
+
+    @app.get("/api/auth/me")
+    def auth_me(request: Request):
+        return {"user": _read_session(request.cookies.get("nw_session"))}
+
+    @app.post("/api/auth/google")
+    def auth_google(body: dict, response: Response):
+        """구글 ID 토큰(credential)을 검증하고 서명 세션 쿠키를 심는다."""
+        if not _auth_enabled():
+            raise HTTPException(409, "로그인이 꺼져 있습니다 (GOOGLE_CLIENT_ID 미설정)")
+        claims = _verify_google(str(body.get("credential", "")))
+        if not claims or not claims.get("email"):
+            raise HTTPException(401, "구글 로그인 검증 실패 — 다시 시도해 주세요")
+        user = {"email": claims["email"], "name": claims.get("name", "")}
+        response.set_cookie("nw_session", _sign_session(user),
+                            max_age=30 * 86400, httponly=True, samesite="lax")
+        return {"user": user}
+
+    @app.post("/api/auth/logout")
+    def auth_logout(response: Response):
+        response.delete_cookie("nw_session")
+        return {"ok": True}
+
+    @app.middleware("http")
+    async def auth_guard(request: Request, call_next):
+        """로그인 켜짐 시: 모든 쓰기에 세션 필수 + 타인 명의 차단.
+
+        author/account가 세션 이메일과 다르면 403 — 평가 경제의 신원 무결성이
+        여기 걸린다(발자국·안목은 '누가'가 전부다). 읽기(GET)는 그대로 열림.
+        """
+        p = request.url.path
+        if (_auth_enabled() and request.method == "POST"
+                and p.startswith("/api/") and not p.startswith("/api/auth/")):
+            user = _read_session(request.cookies.get("nw_session"))
+            if user is None:
+                return JSONResponse({"detail": "로그인이 필요합니다 — 구글로 로그인해 주세요"},
+                                    status_code=401)
+            body = await request.body()
+            try:
+                data = json.loads(body or b"{}")
+            except Exception:
+                data = {}
+            if isinstance(data, dict):
+                for f in ("author", "account"):
+                    v = data.get(f)
+                    if isinstance(v, str) and v and v != user["email"]:
+                        return JSONResponse(
+                            {"detail": f"'{v}' 명의로는 쓸 수 없습니다 — "
+                                       f"로그인된 신원: {user['email']}"},
+                            status_code=403)
+
+            async def receive():
+                return {"type": "http.request", "body": body, "more_body": False}
+            request._receive = receive
+        return await call_next(request)
 
     @app.get("/api/health")
     def health():
