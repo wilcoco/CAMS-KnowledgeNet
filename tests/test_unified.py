@@ -200,17 +200,29 @@ def test_group_contribution_invisible_to_public(client):
     assert client.get("/api/search", params={"q": "sshh", "space": "public"}).json() == []
 
 
-# -- concept identity is always public commons (overlays carry privacy) ------
-def test_concept_roots_and_stubs_are_always_public(client):
-    # a group member writes a page AND references a universal concept; both the
-    # ROOT and the auto-extracted [[ ]] stub must be born public, never squat
-    # the global slug as a private node. (docs/design/05-private-public-endorse)
+# -- 노트 25: 그룹 글은 그룹 소유(기밀 기본), 참조(스텁)만 공용 앵커 ----------
+def test_group_page_is_private_but_referenced_stub_is_public(client):
     r = client.post("/api/nodes", json={"title": "팀A문서", "space": "team-a",
                                         "body": "우리는 [[벡터 시계]]를 쓴다", "author": "a"})
-    assert r.status_code == 200 and r.json()["space"] == "public"   # ROOT public
-    # the referenced concept is now discoverable in the public commons
+    view = r.json()
+    assert r.status_code == 200 and view["space"] == "team-a"       # 그룹 소유
+    assert view["id"].startswith("team-a::")                        # 공용 주소 비점유
+    # 공용 검색·읽기 어디서도 안 보인다 (기밀 기본)
     pub = {n["id"] for n in client.get("/api/search", params={"space": "public"}).json()}
-    assert "팀a문서" in pub
+    assert view["id"] not in pub and "팀a문서" not in pub
+    assert client.get(f"/api/nodes/{view['id']}",
+                      params={"space": "public"}).status_code == 404
+    # 그룹 자신에겐 보인다
+    team = {n["id"] for n in client.get("/api/search", params={"space": "team-a"}).json()}
+    assert view["id"] in team
+    # 참조된 보편 개념([[벡터 시계]]) 스텁은 여전히 공용 앵커 (노트 05 보존)
+    from nightwish import unified as u
+    stub = u.get_service().tree.nodes.get("벡터-시계")
+    assert stub is not None and stub.space == "public"
+    # 명시적 공개(publish)로만 커먼즈에 나간다
+    client.post(f"/api/nodes/{view['id']}/publish", json={"author": "a"})
+    pub2 = {n["id"] for n in client.get("/api/search", params={"space": "public"}).json()}
+    assert view["id"] in pub2
 
 
 def test_create_node_promotes_a_stub_instead_of_500(client):
@@ -260,8 +272,9 @@ def test_group_endorse_reranks_only_inside_the_group(client):
         return [n["id"] for n in client.get("/api/scores", params={"space": space}).json()["top_nodes"]]
 
     assert order("public") == [a]            # commons unmoved by the private overlay
-    assert order("team-a") == [b, a]         # group re-ranks locally on the prior
-    assert order("team-b") == [a]            # another group is unaffected
+    # 노트 25: 그룹 보드는 들여온 것만 — team-a는 b를 밟았고 a는 아직 밖
+    assert order("team-a") == [b]
+    assert order("team-b") == []             # 새 그룹은 빈 공간에서 시작
 
 
 def test_fill_stub_with_ai_keeps_the_slug(client):
@@ -1018,3 +1031,39 @@ def test_ego_endpoint_expands_by_depth(client):
     assert all("label" in e for e in d2["edges"])
     # depth는 1~6으로 클램프
     assert client.get(f"/api/nodes/{root}/ego?depth=9").json()["depth"] == 6
+
+
+# ── 노트 25: 하이브리드 그룹 (사일로+렌즈) ──────────────────────────────────
+
+def test_new_group_starts_empty_and_adopts_commons_by_walking(client):
+    """새 그룹 공간은 비어 있고, 공용 노드는 그룹 발자국으로 밟는 순간 들어온다."""
+    a = client.post("/api/ask", json={"question": "공용 지식 하나", "author": "u"}).json()["node"]["id"]
+    client.post("/api/ask", json={"question": "공용 지식 둘", "author": "u"})
+    # 새 그룹의 자기 공간은 완전히 비어 있다
+    assert client.get("/api/search", params={"space": "new-team"}).json() == []
+    assert client.get("/api/scores", params={"space": "new-team"}).json()["top_nodes"] == []
+    # 공용 노드는 여전히 *열람*은 가능 (읽기 권한 ≠ 공간 소속)
+    assert client.get(f"/api/nodes/{a}", params={"space": "new-team"}).status_code == 200
+    # 그룹 발자국으로 밟으면 우리 공간에 들어온다
+    client.post("/api/endorse", json={"account": "m1", "node_id": a,
+                                      "amount": 1, "space": "new-team"})
+    ids = {n["id"] for n in client.get("/api/search", params={"space": "new-team"}).json()}
+    assert a in ids and len(ids) == 1        # 밟은 것만 — 둘째 공용 노드는 여전히 밖
+
+
+def test_group_ask_creates_confidential_group_root(client):
+    """그룹에서 물은 질문·답은 그룹 소유 — 공용에서 검색·열람 불가."""
+    r = client.post("/api/ask", json={"question": "우리 팀 기밀 질문",
+                                      "author": "t1", "space": "team-x"}).json()
+    nid = r["node"]["id"]
+    assert nid.startswith("team-x::") and r["node"]["space"] == "team-x"
+    assert client.get("/api/search", params={"q": "기밀", "space": "public"}).json() == []
+    assert client.get(f"/api/nodes/{nid}", params={"space": "public"}).status_code == 404
+    assert client.get(f"/api/nodes/{nid}", params={"space": "team-y"}).status_code == 404
+    # 같은 질문을 그룹에서 또 물으면(채택 후) 우리 공간의 기존 답 재사용
+    client.post("/api/mint", json={"account": "t2", "amount": 10})
+    client.post("/api/endorse", json={"account": "t2", "node_id": nid,
+                                      "amount": 1, "space": "team-x"})
+    again = client.post("/api/ask", json={"question": "우리 팀 기밀 질문",
+                                          "author": "t3", "space": "team-x"}).json()
+    assert again["stage"] == "existing" and again["node"]["id"] == nid

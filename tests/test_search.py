@@ -81,8 +81,9 @@ def test_group_endorse_reranks_search_only_inside_group():
     for i in range(6):
         t.group_endorse("team-a", f"g{i}", "a", weight=9.0)
     assert [n.id for n in t.search("온도", "public")] == ["b", "a"]   # commons unmoved
-    assert [n.id for n in t.search("온도", "team-a")] == ["a", "b"]   # group re-ranked
-    assert [n.id for n in t.search("온도", "team-b")] == ["b", "a"]   # other group unaffected
+    # 노트 25: 그룹 검색은 *들여온 것만* — a는 발자국으로 들어왔고 b는 아직 밖
+    assert [n.id for n in t.search("온도", "team-a")] == ["a"]
+    assert [n.id for n in t.search("온도", "team-b")] == []           # 새 그룹은 빈 공간
 
 
 def test_empty_query_browses_by_authority():
