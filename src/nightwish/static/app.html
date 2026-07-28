@@ -248,6 +248,8 @@
 
   <!-- RIGHT: my profile (territory share) + scores + economy -->
   <aside class="right">
+    <h2 class="sec" title="지금 보는 답이 다른 질문·답과 어떻게 이어져 있나 — 위: 원답·상위·전제 / 아래: 기여·하위 / 왼쪽: 대립 / 오른쪽: 관련·역링크. 클릭하면 그 노드로 이동해 지도가 다시 그려집니다">🕸 연결 지도</h2>
+    <div id="ego" class="prov">노드를 열면 그 연결이 여기 그려집니다</div>
     <h2 class="sec" title="내가 만들거나 가려낸 지식이 전체에서 차지하는 몫">내 프로필 — 지식 영역 점유율</h2>
     <div id="me-stats" class="prov">…</div>
     <h2 class="sec" title="많이 *그리고 두루* 밟힌(👣 발자국 받은) 답이 위로 — 내용 가치 점수">잘 밟힌 길 (권위)</h2>
@@ -521,6 +523,68 @@ function focusPane(pane){
     if (pane.dataset.nodeId) syncTree(pane.dataset.nodeId);   // 트리에 위치 반영
   }
 }
+// 🕸 연결 지도(에고 그래프): 지금 보는 노드의 이웃을 의미 방향으로 배치해 그린다.
+// 위=원답(부모)·상위·전제 / 아래=기여(보강·정정·후속)·하위 / 좌=대립 / 우=관련·역링크.
+// 클릭 = 그 노드를 열고(pushPane) 지도를 재중심 — 그래프 위를 걸어 다니는 탐색.
+function renderEgo(n){
+  const box = $('#ego'); if (!box) return;
+  if (!n){ box.textContent = '노드를 열면 그 연결이 여기 그려집니다'; return; }
+  const kindLbl = {comment:'보강', fork:'정정', followup:'후속', unfold:'펼침', query:'질의', contribute:'보강'};
+  const ups = [], downs = [], lefts = [], rights = [];
+  if (n.parent) ups.push({id:n.parent.id, t:n.parent.title, tag:'원답'});
+  (n.outlinks||[]).forEach(o=>{
+    const r = o.rel || '';
+    if (r === '상위' || r === '전제') ups.push({id:o.id, t:o.title, tag:r});
+    else if (r === '하위') downs.push({id:o.id, t:o.title, tag:r});
+    else if (r === '대립') lefts.push({id:o.id, t:o.title, tag:'대립'});
+    else rights.push({id:o.id, t:o.title, tag:'관련'});
+  });
+  (n.thread||[]).forEach(c=>{
+    const e = {id:c.id, t:(c.title||c.body||'').slice(0,24), tag:kindLbl[c.kind]||c.kind};
+    (c.kind === 'fork' ? lefts : downs).push(e);
+  });
+  (n.backlinks||[]).forEach(b=> rights.push({id:b.id, t:b.title, tag:'역링크'}));
+  const cap = a => a.slice(0, 4);
+  const U = cap(ups), D = cap(downs), L = cap(lefts), R = cap(rights);
+  if (!U.length && !D.length && !L.length && !R.length){
+    box.innerHTML = '<div class="prov">아직 연결이 없습니다 — 본문에 [[개념]]을 걸거나, 보강·정정·후속으로 가지를 치면 지도가 자랍니다.</div>';
+    return;
+  }
+  const W = box.clientWidth || 300, rowH = 34;
+  const H = Math.max(150, (Math.max(U.length, 1) + Math.max(D.length, 1)) * rowH + 60);
+  const cx = W/2, cy = H/2;
+  const nodes = [], edges = [];
+  const place = (arr, side) => arr.forEach((e, i)=>{
+    let x, y;
+    if (side === 'u'){ x = cx; y = 26 + i*rowH; }
+    else if (side === 'd'){ x = cx; y = cy + 40 + i*rowH; }
+    else if (side === 'l'){ x = 8; y = cy - ((arr.length-1)/2 - i)*rowH; }
+    else { x = W - 8; y = cy - ((arr.length-1)/2 - i)*rowH; }
+    nodes.push({...e, x, y, side});
+    edges.push({e, x, y, side});
+  });
+  place(U,'u'); place(D,'d'); place(L,'l'); place(R,'r');
+  const esc2 = s => esc((s||'').length > 14 ? (s||'').slice(0,13)+'…' : (s||''));
+  const color = t => t==='정정'||t==='대립' ? 'var(--fork)' : 'var(--link)';
+  const svg = `
+  <svg width="${W}" height="${H}" style="max-width:100%">
+    ${edges.map(({e,x,y,side})=>{
+      const ex = side==='l' ? x+8 : side==='r' ? x-8 : x;
+      return `<line x1="${cx}" y1="${cy}" x2="${ex}" y2="${y}" stroke="${color(e.tag)}" stroke-opacity=".35"/>
+        <text x="${(cx+ex)/2}" y="${(cy+y)/2 - 3}" font-size="9" fill="${color(e.tag)}" text-anchor="middle">${esc(e.tag)}</text>`;
+    }).join('')}
+    ${nodes.map(e=>{
+      const anchor = e.side==='l' ? 'start' : e.side==='r' ? 'end' : 'middle';
+      return `<text class="ego-n" data-gid="${esc(e.id)}" x="${e.x}" y="${e.y}" font-size="11"
+        text-anchor="${anchor}" fill="var(--fg,#ddd)" style="cursor:pointer" text-decoration="underline">${esc2(e.t)}</text>`;
+    }).join('')}
+    <g><rect x="${cx-52}" y="${cy-12}" width="104" height="22" rx="10" fill="none" stroke="var(--link)"/>
+      <text x="${cx}" y="${cy+3}" font-size="11" text-anchor="middle" fill="var(--link)">${esc2(n.title||'(답)')}</text></g>
+  </svg>`;
+  box.innerHTML = svg;
+  box.querySelectorAll('.ego-n').forEach(t=> t.onclick = ()=> openNode(t.dataset.gid));
+}
+
 async function refreshPane(pane){
   try { fillPane(await fetchNode(pane.dataset.nodeId), pane); }
   catch(e){ closePane(pane); }     // 새 레이어에서 안 보이면 패널 정리
@@ -529,6 +593,8 @@ function refreshAllPanes(){ [...panes().children].forEach(p => p.dataset.nodeId 
 function closePane(pane){               // close this pane and everything to its right
   const i = paneIndexOf(pane);
   while (panes().children.length > i){ panes().lastChild.remove(); trail.pop(); }
+  const last = panes().lastChild;
+  renderEgo(last && last._node ? last._node : null);
   if (!panes().children.length) showOnboard();   // 전부 닫히면 온보딩으로
   else focusPane(panes().lastChild);
 }
@@ -886,6 +952,9 @@ function fillPane(n, c){
     else { $('#search').value = a.dataset.link; doSearch(); }
   });
 
+  // 활성(맨 오른쪽) 패널의 연결을 우측 지도에 즉시 반영 — 기여를 달면
+  // refreshPane→fillPane 경로로 새 링크가 바로 지도에 나타난다.
+  if (c.parentElement && c === c.parentElement.lastElementChild) renderEgo(n);
   c.querySelectorAll('button[data-act]').forEach(b =>
     b.onclick = ()=> showReply(b.dataset.id, b.dataset.act, c));
   c.querySelectorAll('.eval-btn').forEach(b =>
