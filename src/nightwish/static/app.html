@@ -259,7 +259,7 @@
     <div class="tabs">
       <button class="tab active" data-rtab="map" title="지금 보는 답의 연결 — 드래그·휠줌·팬, 클릭=이동">🕸 연결 지도</button>
       <button class="tab" data-rtab="me" title="내 점유율·안목·재검— 나의 기록">👤 나의 기록</button>
-      <button class="tab" data-rtab="board" title="잘 밟힌 길·안목·단골 랭킹">🏆 점수판</button>
+      <button class="tab" data-rtab="board" title="발자국 쌓인 길·안목·단골 랭킹">🏆 점수판</button>
     </div>
     <div class="tabpane" id="rtab-map">
       <div class="row" style="margin-bottom:6px;flex-wrap:wrap;gap:4px">
@@ -281,7 +281,7 @@
     <div id="me-stats" class="prov">…</div>
     </div>
     <div class="tabpane" id="rtab-board" style="display:none">
-    <h2 class="sec" title="많이 *그리고 두루* 밟힌(👣 발자국 받은) 답이 위로 — 내용 가치 점수">잘 밟힌 길 (권위)</h2>
+    <h2 class="sec" title="많이 *그리고 두루* 발자국이 쌓인 답이 위로 — 내용 가치 점수">발자국 쌓인 길 (권위)</h2>
     <div id="top-nodes"></div>
     <h2 class="sec" title="남보다 먼저 좋은 답을 알아본 사람 — 그 답이 나중에 두루 인정받으면 오릅니다">안목 — 앞서 알아본 사람</h2>
     <div id="top-hubs"></div>
@@ -371,14 +371,14 @@ async function refreshStat(){
 
 function adoptBadge(n){
   if (n.is_query || n.is_stub) return '';
-  return n.adopted ? '<span class="badge adopted" title="누군가 밟고 간 길 — 채택됨">채택</span>'
-                   : '<span class="badge draft" title="아직 아무도 안 밟음 — 발자국이 찍히면 채택">초안</span>';
+  return n.adopted ? '<span class="badge adopted" title="누군가 발자국을 남긴 길 — 채택됨">채택</span>'
+                   : '<span class="badge draft" title="아직 발자국 없음 — 발자국이 남겨지면 채택">초안</span>';
 }
 function nodeItem(n){
   const b = (n.is_query ? '<span class="badge query">질의</span>'
           : n.frozen ? '<span class="badge frozen">AI·동결</span>' : '')
           + ((space() !== 'public' && n.space === 'public')
-             ? ' <span class="badge" title="공용 커먼즈의 답 — 👣 밟으면 우리 공간에 들어옵니다">🌐 공용</span>' : '')
+             ? ' <span class="badge" title="공용 커먼즈의 답 — 👣 발자국을 남기면 우리 공간에 들어옵니다">🌐 공용</span>' : '')
           + ' ' + adoptBadge(n)
           + (n.freshness === 'stale' ? ' <span class="badge" title="1년 넘게 갱신 안 된 답">🔴</span>'
              : n.freshness === 'aging' ? ' <span class="badge" title="90일 넘게 갱신 안 된 답">🟡</span>' : '')
@@ -436,7 +436,7 @@ async function doSearch(){
     offer.appendChild(go);
     box.appendChild(offer);
   }
-  // 그룹 뷰의 공용 계단: 우리 것 다음에 공용 커먼즈 결과 (밟으면 들여오기)
+  // 그룹 뷰의 공용 계단: 우리 것 다음에 공용 커먼즈 결과 (발자국 남기면 들여오기)
   if (grpView && q){
     try{
       const shown = new Set(res.map(n => n.id));
@@ -445,7 +445,7 @@ async function doSearch(){
       if (pub.length){
         const h = document.createElement('div');
         h.className = 'prov'; h.style.marginTop = '10px';
-        h.innerHTML = `🌐 <b>공용 커먼즈에서</b> ${pub.length}개 — 열어 보고 👣 밟으면 우리 공간에 들어옵니다`;
+        h.innerHTML = `🌐 <b>공용 커먼즈에서</b> ${pub.length}개 — 열어 보고 👣 발자국을 남기면 우리 공간에 들어옵니다`;
         box.appendChild(h);
         pub.forEach(n => box.appendChild(nodeItem(n)));
       }
@@ -459,7 +459,7 @@ async function doSearch(){
     const nb = document.createElement('button');
     nb.className = 'sec'; nb.style.marginLeft = res.length ? '6px' : '0';
     nb.textContent = '✨ 새 답 생성 (AI)';
-    nb.title = '프런티어 AI가 새 초안을 만듭니다 — 초안은 사람이 밟아야 채택됩니다';
+    nb.title = '프런티어 AI가 새 초안을 만듭니다 — 초안은 사람이 발자국을 남겨야 채택됩니다';
     nb.onclick = ()=> doAsk();
     last.appendChild(nb);
     box.appendChild(last);
@@ -803,7 +803,7 @@ function showOnboard(){
     <p>물으면 AI가 초안을 깔고 — 당신과 동료의 <b>판단(👣) · 보강 · 정정</b>이 그것을
        <b>믿을 수 있는 답</b>으로 만듭니다. 다음 사람은 그 길을 <b>공짜로</b> 다시 씁니다.</p>
     <p class="prov">👣 <b>발자국</b> = "이 답이 맞다/도움됐다"는 한 번의 표시. 눈밭의 길처럼 —
-       <b>많이 *그리고 두루*</b> 밟힌 답일수록 위로 올라가고, 그 길을 <b>먼저 알아본 사람의 안목</b>도 함께 쌓입니다.</p>
+       <b>많이 *그리고 두루*</b> 발자국이 쌓인 답일수록 위로 올라가고, 그 길을 <b>먼저 알아본 사람의 안목</b>도 함께 쌓입니다.</p>
     <div class="row" style="justify-content:center">
       <input id="onboard-q" placeholder="지금 궁금한 것을 그대로 적어보세요" style="width:62%"/>
       <button id="onboard-go">🤖 첫 질문하기</button>
@@ -917,7 +917,7 @@ function threadHTML(list){
     const evalCtrl = canEval ? `
       <div class="row eval-row">
         <button class="sec eval-btn" data-eid="${esc(c.id)}"
-          title="이 가지가 맞다/도움됐다면 한 번 밟으세요 — 두루 밟힐수록 위로 (평가=저작)">👣 나도 밟기</button>
+          title="이 가지가 맞다/도움됐다면 발자국을 남기세요 — 두루 쌓일수록 위로 (평가=저작)">👣 발자국 남기기</button>
         <span class="prov eval-out">· 👣 ${c.staked}</span>
       </div>` : '';
     const grpBadge = c.space && c.space!=='public'
@@ -964,18 +964,18 @@ function sectionsHTML(thread){
        + (rest.length ? threadHTML(rest) : '');
 }
 
-// 발자국 메타포어를 살린 한 줄(노트 13): 길의 '닳음' = 얼마나 두루 밟혔나.
+// 발자국 메타포어를 살린 한 줄(노트 13): 길의 '닳음' = 발자국이 얼마나 두루 쌓였나.
 // 👣 = 도움됐다 표시 수, 권위 = 그게 쌓인 신뢰. 발자국이 적으면 '갓 낸 길'.
 function footprintLine(n){
   const s = n.staked || 0;
-  const wear = s===0 ? '🌱 아직 아무도 안 밟은 길'
+  const wear = s===0 ? '🌱 아직 발자국 없는 길'
     : s<3  ? `👣 ${s} · 갓 난 길`
     : s<12 ? `👣 ${s} · 다져지는 길`
-    :        `👣 ${s} 🔥 두루 밟힌 길`;
+    :        `👣 ${s} 🔥 두루 걸어간 길`;
   // 두루(독립 출처): 같은 무리는 √n 표 — 권위가 '수'가 아니라 '다양성'으로 선다(노트 17)
   const indep = (n.walkers||0) >= 2
     ? ` · 두루 ${n.indep}${n.indep < n.walkers ? `<span class="m">/${n.walkers}</span>` : '명'}` : '';
-  return `<span title="👣 = '도움됐다'고 밟은 사람 수 · 두루 = 그중 *서로 독립인* 유효 수(한 무리는 √n표). 많이 그리고 두루 밟힐수록 권위가 섭니다.">${wear}${indep} · 권위 ${n.authority}</span>`;
+  return `<span title="👣 = '도움됐다'고 발자국을 남긴 사람 수 · 두루 = 그중 *서로 독립인* 유효 수(한 무리는 √n표). 많이 그리고 두루 쌓일수록 권위가 섭니다.">${wear}${indep} · 권위 ${n.authority}</span>`;
 }
 
 // n번째 발견자(노트 17 §3): 발자국 순서가 곧 자산 — 내가 이 길을 몇 번째로 알아봤나
@@ -1009,13 +1009,13 @@ function fillPane(n, c){
       <button class="sec q-human">사람이 답하기</button></div>
     <div class="q-answer"></div>` : '';
   const grp = space() !== 'public';        // 그룹 레이어면 평가 시맨틱이 다르다
-  // ① 판단(가려냄): 발자국 버튼 — 한 번 밟는 게 곧 '이 길이 맞다'는 표시.
+  // ① 판단(가려냄): 발자국 버튼 — 발자국 하나가 곧 '이 길이 맞다'는 표시.
   const endorseTip = grp
     ? `'${esc(space())}' 그룹 안에서만 남는 발자국 — 우리끼리 길을 다집니다`
-    : '이 답이 맞다/도움됐다면 한 번 밟으세요. 당신 발자국이 이 길을 남에게 추천하고, '
+    : '이 답이 맞다/도움됐다면 발자국을 남기세요. 당신 발자국이 이 길을 남에게 추천하고, '
       + '나중에 두루 인정받으면 *먼저 알아본 당신의 안목*도 함께 쌓입니다 (특허 허브).';
   const endorse = (!n.is_query && !n.is_stub) ? `
-      <button class="sec btn-endorse" title="${endorseTip}">👣 나도 밟기</button>
+      <button class="sec btn-endorse" title="${endorseTip}">👣 발자국 남기기</button>
       ${(n.space && n.space !== 'public' && n.space === space())
         ? `<button class="sec btn-publish" title="기밀이 기본 — 공개는 명시적 선택입니다">🌐 공용에 공개</button>` : ''}
       <span class="prov end-out"></span>` : '';
@@ -1213,13 +1213,13 @@ function fillPane(n, c){
       const out = c.querySelector('.end-out');
       try{
         const first = !n.staked;   // 첫 발자국이면 길이 '채택'으로 살아남
-        const r = await withBusy('길을 밟는 중…',
+        const r = await withBusy('발자국을 남기는 중…',
           ()=> api('POST','/api/endorse',
             {account:me(), node_id:n.id, amount:1, space:space()}), ev.currentTarget);
         toast(r.balance===undefined
-          ? `👣 ${r.space} 안에서 이 길을 밟았어요`
+          ? `👣 ${r.space} 안에서 발자국을 남겼어요`
           : first ? '👣 첫 발자국 — 이 길이 채택됐어요. 뒷사람이 더 쉽게 찾습니다'
-                  : '👣 밟았어요 — 두루 밟힐수록 위로 올라가고, 먼저 알아본 안목도 쌓입니다');
+                  : '👣 발자국을 남겼어요 — 두루 쌓일수록 위로 올라가고, 먼저 알아본 안목도 쌓입니다');
         loadLedger(); loadScores(); refreshPane(c);
       }catch(e){ out.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
     };
@@ -1283,18 +1283,18 @@ async function loadMeStats(){
   const grp = s.group ? `
     <div class="sc big" data-ov="grp"><span>그룹 «${esc(s.group.space)}» 점유율</span>
       <span class="v">${s.group.pct}% <span class="prov">· 안목 ${s.group.hub}</span></span></div>` : '';
-  // 👁 안목의 길들(노트 17 §3): 내가 먼저 밟고, 뒤에 따라온 길 — 검증의 순간을 보여줌
+  // 👁 안목의 길들(노트 17 §3): 내가 먼저 걸었고, 뒤에 따라온 길 — 검증의 순간
   const fs = s.foresight || [];
   const fsHTML = fs.length ? `
-    <div class="prov" style="margin:10px 0 2px" title="내가 일찍 밟은 길을 그 후 몇 명이 따라 걸었나 — 따라온 사람이 늘수록 내 안목(허브)이 쌓입니다">👁 내 안목 — 먼저 밟고, 뒤에 따라온 길</div>
+    <div class="prov" style="margin:10px 0 2px" title="내가 일찍 발자국을 남긴 길을 그 후 몇 명이 따라 걸었나 — 따라온 사람이 늘수록 내 안목(허브)이 쌓입니다">👁 내 안목 — 먼저 걸은 길, 뒤따라온 사람들</div>
     ${fs.filter(f=>f.after>0).slice(0,5).map(f=>`
       <div class="sc"><a class="me-node" data-oid="${esc(f.id)}" title="${esc(f.title)}">${esc(f.title)}</a>
         <span class="v" title="내가 ${f.pos}번째, 그 후 ${f.after}명">${f.pos}번째 · +${f.after}명</span></div>`).join('')
-    || '<div class="prov">아직 따라온 사람 없음 — 밟아둔 길이 자라면 여기 보입니다</div>'}` : '';
-  // 🔎 재검(노트 21): 내가 밟은 길에 정정이 제기됨 — 갈아탈지 재판단은 나의 몫
+    || '<div class="prov">아직 따라온 사람 없음 — 남겨둔 발자국이 자라면 여기 보입니다</div>'}` : '';
+  // 🔎 재검(노트 21): 내가 걸은 길에 정정이 제기됨 — 갈아탈지 재판단은 나의 몫
   const rc = s.recheck || [];
   const rcHTML = rc.length ? `
-    <div class="prov" style="margin:10px 0 2px" title="당신이 밟은 답에 정정/다른 답이 제기됐습니다 — 다시 보고, 정정이 맞다면 그쪽을 밟아주세요. 판정은 사람이 합니다">🔎 재검 — 내가 밟은 길에 정정이 제기됨</div>
+    <div class="prov" style="margin:10px 0 2px" title="당신이 발자국을 남긴 답에 정정/다른 답이 제기됐습니다 — 다시 보고, 정정이 맞다면 그쪽에 발자국을 남겨주세요. 판정은 사람이 합니다">🔎 재검 — 내가 걸은 길에 정정이 제기됨</div>
     ${rc.map(r=>`
       <div class="sc"><a class="me-node" data-oid="${esc(r.id)}" title="${esc(r.fork_note)}">${esc(r.title)}</a>
         <span class="v" style="color:var(--fork)">⚔️ 재검</span></div>`).join('')}` : '';
@@ -1319,7 +1319,7 @@ async function loadMeStats(){
     const grown = fs.filter(f => seen[f.id] !== undefined && f.after > seen[f.id]);
     if (grown.length){
       const top = grown[0];
-      toast(`👁 당신이 ${top.pos}번째로 밟은 '${top.title.slice(0,20)}'${grown.length>1?` 외 ${grown.length-1}곳`:''}을 그 후 다른 사람들이 따라 걸었습니다 — 안목이 쌓였어요`, 6000);
+      toast(`👁 당신이 ${top.pos}번째로 걸은 '${top.title.slice(0,20)}'${grown.length>1?` 외 ${grown.length-1}곳`:''}을 그 후 다른 사람들이 따라 걸었습니다 — 안목이 쌓였어요`, 6000);
     }
     fs.forEach(f => seen[f.id] = f.after);
     localStorage.setItem(key, JSON.stringify(seen));

@@ -33,8 +33,14 @@ from typing import Callable, Iterable, Optional
 # documents; a real embedder may return any (consistent) dimensionality.
 _EMBED_DIM = 256
 
-_WORD_RE = re.compile(r"[0-9a-z]+|[가-힣]+", re.UNICODE)
-_CJK_RE = re.compile(r"[가-힣]")
+#: 문자권별 토큰 런 — 한글 동작은 종전과 동일. 띄어쓰기 없는 문자권(한자·
+#: 가나·타이)은 한글처럼 바이그램으로, 그 밖의 문자권(키릴·그리스·라틴 확장
+#: 등)은 단어 토큰으로. 종전엔 비한글 문자권이 토큰 0개 = 색인 불가였다.
+_WORD_RE = re.compile(
+    r"[0-9a-z]+|[가-힣]+|[\u4e00-\u9fff]+|[\u3040-\u30ff]+|[\u0e00-\u0e7f]+"
+    r"|[^\W\d_0-9a-z가-힣\u4e00-\u9fff\u3040-\u30ff\u0e00-\u0e7f]+",
+    re.UNICODE)
+_CJK_RE = re.compile(r"[가-힣\u4e00-\u9fff\u3040-\u30ff\u0e00-\u0e7f]")
 
 
 def tokenize(text: str) -> list[str]:
