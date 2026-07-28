@@ -1067,3 +1067,42 @@ def test_group_ask_creates_confidential_group_root(client):
     again = client.post("/api/ask", json={"question": "우리 팀 기밀 질문",
                                           "author": "t3", "space": "team-x"}).json()
     assert again["stage"] == "existing" and again["node"]["id"] == nid
+
+
+# ── 구글 로그인 (선택적 인증 — GOOGLE_CLIENT_ID 있으면 켜짐) ────────────────
+
+def test_google_auth_gates_writes_and_binds_identity(client, monkeypatch):
+    """켜지면: 쓰기=로그인 필수, 신원=검증 이메일, 타인 명의 403. 꺼지면 자유."""
+    from nightwish import unified as u
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
+    u.set_google_verifier(
+        lambda cred, cid: {"email": "json@example.com", "name": "Json"}
+        if cred == "good-token" and cid == "test-client-id" else None)
+    try:
+        assert client.get("/api/auth/config").json()["enabled"] is True
+        # 미로그인 쓰기 차단 (읽기는 열림)
+        assert client.post("/api/ask", json={"question": "q", "author": "x"}).status_code == 401
+        assert client.get("/api/search?q=아무거나").status_code == 200
+        # 가짜 토큰 거절
+        assert client.post("/api/auth/google", json={"credential": "bad"}).status_code == 401
+        # 로그인 → 세션 쿠키
+        r = client.post("/api/auth/google", json={"credential": "good-token"})
+        assert r.status_code == 200 and r.json()["user"]["email"] == "json@example.com"
+        assert client.get("/api/auth/me").json()["user"]["email"] == "json@example.com"
+        # 타인 명의 차단 / 본인 명의 허용
+        assert client.post("/api/ask", json={"question": "q", "author": "남의이름"}).status_code == 403
+        ok = client.post("/api/ask", json={"question": "인증된 질문",
+                                           "author": "json@example.com"})
+        assert ok.status_code == 200
+        # endorse의 account도 같은 규칙
+        nid = ok.json()["node"]["id"]
+        client.post("/api/mint", json={"account": "json@example.com", "amount": 10})
+        assert client.post("/api/endorse", json={"account": "해커", "node_id": nid,
+                                                 "amount": 1}).status_code == 403
+        # 로그아웃 → 다시 차단
+        client.post("/api/auth/logout")
+        assert client.post("/api/ask", json={"question": "q2",
+                                             "author": "json@example.com"}).status_code == 401
+    finally:
+        u.set_google_verifier(None) if False else None
+        u._google_verifier = None

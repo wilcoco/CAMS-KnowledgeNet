@@ -15,7 +15,7 @@ cmds = [
   # 베이스 이미지의 pip로 아래 deps(전부 manylinux wheel) 설치에 충분하고,
   # 업그레이드가 끌어오는 최신 빌드툴(packaging 26 등)에서 CDN 해시 불일치로
   # 빌드가 깨진 사례가 있어 실패 지점을 없앤다.
-  "/opt/venv/bin/pip install fastapi 'uvicorn[standard]' pydantic anthropic 'psycopg[binary]'",
+  "/opt/venv/bin/pip install fastapi 'uvicorn[standard]' pydantic anthropic 'psycopg[binary]' google-auth",
 ]
 
 [phases.build]
