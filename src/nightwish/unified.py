@@ -438,8 +438,10 @@ class UnifiedService:
             info.update(durable=False, db_ok=False, error=str(e))
         return info
 
-    def _new_id(self, base: str) -> str:
+    def _new_id(self, base: str, space: str = "public") -> str:
         slug = slugify(base) or "node"
+        if space and space != "public":
+            slug = f"{space}::{slug}"      # 그룹 루트는 공용 주소를 점유하지 않는다
         if slug not in self.tree.nodes:
             return slug
         self._seq += 1
@@ -966,7 +968,10 @@ def create_app() -> FastAPI:
             # 최댓값**을 먼저 보여준다. 표준답이 먼저 채택돼 스테이크가 쌓여
             # 있어도, 더 높은 권위의 교정이 있으면 그게 이긴다. force=True면 생성.
             if not body.force:
-                dup = svc.tree.nodes.get(slugify(body.question))
+                dup_key = slugify(body.question)
+                if svc.tree._is_group(body.space):
+                    dup_key = f"{body.space}::{dup_key}"   # 우리 공간의 기존 답
+                dup = svc.tree.nodes.get(dup_key)
                 if (dup is not None and not dup.is_stub
                         and svc.tree._visible(dup, body.space)):
                     best, best_a = None, -1.0
@@ -976,9 +981,13 @@ def create_app() -> FastAPI:
                         if cur is None:
                             continue
                         stack.extend(cur.children)
+                        adopted = (
+                            sum(svc.econ.staked_on(cur.id).values()) > 0
+                            or (svc.tree._is_group(body.space)          # 그룹 코인
+                                and svc.tree.group_adopted(body.space, cur.id)))
                         if (cur.is_answer and not cur.is_stub
                                 and svc.tree._visible(cur, body.space)
-                                and sum(svc.econ.staked_on(cur.id).values()) > 0):
+                                and adopted):
                             a = svc.tree.authority_in(cur.id, body.space)
                             if a > best_a:
                                 best, best_a = cur, a
@@ -995,10 +1004,11 @@ def create_app() -> FastAPI:
             # WITHOUT holding the lock (status poll, other users keep moving).
             text = _ask_ai(body.question)
         with svc.writing():
-            nid = svc._new_id(body.question)
-            # The concept (ROOT) is always public commons; the asker's group
-            # (body.space) only frames *discovery*, never the concept's home.
-            svc.tree.add_root(nid, body.question, text, body.author)
+            nid = svc._new_id(body.question, body.space)
+            # 노트 25: 그룹에서 물은 질문·답은 **그룹 소유**(기밀 기본) —
+            # 공용 공개는 명시적 publish로만. 공용에서 물으면 종전대로 커먼즈.
+            svc.tree.add_root(nid, body.question, text, body.author,
+                              space=body.space)
             svc.tree.mark_answered(nid, _ai_model)
             return {"stage": "ai",
                     "node": _node_view(svc, nid, body.space, full=True),
@@ -1015,6 +1025,8 @@ def create_app() -> FastAPI:
         svc = get_service()
         with svc.writing():
             nid = slugify(body.title)
+            if svc.tree._is_group(body.space):
+                nid = f"{body.space}::{nid}"   # 그룹 페이지 = 그룹 소유(노트 25)
             existing = svc.tree.nodes.get(nid)
             if existing is not None and not existing.is_stub:
                 if existing.frozen:
@@ -1024,7 +1036,8 @@ def create_app() -> FastAPI:
                 return _node_view(svc, existing.id, body.space, full=True)
             if existing is not None:           # promote an empty stub → real page
                 del svc.tree.nodes[nid]
-            svc.tree.add_root(nid, body.title, body.body, body.author)
+            svc.tree.add_root(nid, body.title, body.body, body.author,
+                              space=body.space)
             _self_footprint(svc, nid, body.author)
             return _node_view(svc, nid, body.space, full=True)
 
@@ -1318,6 +1331,25 @@ def create_app() -> FastAPI:
                 raise HTTPException(400, str(e))
             return {"node": node_id, "target": body.target,
                     "rels": {t: len(u) for t, u in rels.items()}}
+
+    @app.post("/api/nodes/{node_id}/publish")
+    def publish(node_id: str, body: FillBody):
+        """그룹 소유 노드를 공용 커먼즈에 공개 — 명시적 행위로만 (노트 25).
+
+        기밀이 기본이고 공개가 선택이다. 스레드의 다른 그룹 기여는 그대로
+        그룹에 남는다(공개되는 건 이 노드 하나).
+        """
+        svc = get_service()
+        with svc.writing():
+            n = svc.tree.nodes.get(node_id)
+            if n is None:
+                raise HTTPException(404, f"node {node_id!r} not found")
+            if n.space == "public":
+                raise HTTPException(409, "이미 공용에 있습니다")
+            n.space = "public"
+            n.last_editor = body.author
+            svc.tree.bump()
+            return _node_view(svc, node_id, "public", full=True)
 
     @app.post("/api/nodes/{node_id}/reconfirm")
     def reconfirm(node_id: str, body: FillBody):
@@ -1882,7 +1914,9 @@ def create_app() -> FastAPI:
             if svc.tree._is_group(body.space):
                 first_time = svc.tree.group_linker_position(
                     body.space, body.account, body.node_id) is None
-                if first_time and body.account != n.author:
+                # 저자 가드 없음(노트 25): 자기 공용 글을 자기 그룹에 들여오는 것도
+                # 채택이다 — 그룹 코인은 자유발행·비태환이라 자기부양 이득이 없다.
+                if first_time:
                     svc.tree.group_endorse(
                         body.space, body.account, body.node_id, weight=body.amount)
                 return {

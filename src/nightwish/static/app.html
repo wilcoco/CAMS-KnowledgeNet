@@ -376,6 +376,8 @@ function adoptBadge(n){
 function nodeItem(n){
   const b = (n.is_query ? '<span class="badge query">질의</span>'
           : n.frozen ? '<span class="badge frozen">AI·동결</span>' : '')
+          + ((space() !== 'public' && n.space === 'public')
+             ? ' <span class="badge" title="공용 커먼즈의 답 — 👣 밟으면 우리 공간에 들어옵니다">🌐 공용</span>' : '')
           + ' ' + adoptBadge(n)
           + (n.freshness === 'stale' ? ' <span class="badge" title="1년 넘게 갱신 안 된 답">🔴</span>'
              : n.freshness === 'aging' ? ' <span class="badge" title="90일 넘게 갱신 안 된 답">🟡</span>' : '')
@@ -397,9 +399,12 @@ async function doSearch(){
   let res = await api('GET', `/api/search?q=${encodeURIComponent(q)}&space=${space()}`);
   if ($('#sort-adopted') && $('#sort-adopted').checked)
     res = [...res].sort((a,b)=> (b.adopted?1:0)-(a.adopted?1:0) || b.authority-a.authority);
+  const grpView = space() !== 'public';
   const box = $('#results'); box.innerHTML = '';
   if (!res.length){
-    box.innerHTML = '<div class="prov">아직 이 길을 걸은 사람이 없습니다 — 아래에서 새 답을 생성하면 당신이 첫 걸음입니다.</div>';
+    box.innerHTML = grpView
+      ? '<div class="prov">이 그룹의 공간은 아직 비어 있습니다 — 그룹의 질문으로 시작하거나, 아래 🌐 공용 커먼즈에서 찾아 👣로 들여오세요.</div>'
+      : '<div class="prov">아직 이 길을 걸은 사람이 없습니다 — 아래에서 새 답을 생성하면 당신이 첫 걸음입니다.</div>';
   } else if (q){
     const lead = document.createElement('div');
     lead.className = 'prov';
@@ -429,6 +434,21 @@ async function doSearch(){
     };
     offer.appendChild(go);
     box.appendChild(offer);
+  }
+  // 그룹 뷰의 공용 계단: 우리 것 다음에 공용 커먼즈 결과 (밟으면 들여오기)
+  if (grpView && q){
+    try{
+      const shown = new Set(res.map(n => n.id));
+      const pub = (await api('GET', `/api/search?q=${encodeURIComponent(q)}&space=public&limit=10`))
+        .filter(n => !shown.has(n.id));
+      if (pub.length){
+        const h = document.createElement('div');
+        h.className = 'prov'; h.style.marginTop = '10px';
+        h.innerHTML = `🌐 <b>공용 커먼즈에서</b> ${pub.length}개 — 열어 보고 👣 밟으면 우리 공간에 들어옵니다`;
+        box.appendChild(h);
+        pub.forEach(n => box.appendChild(nodeItem(n)));
+      }
+    }catch(e){ /* 공용 계단 실패는 조용히 — 그룹 결과는 이미 위에 */ }
   }
   // 3계단(마지막): 그래도 없으면 생성 — 사다리의 바닥이 아니라 꼭대기(가장 비쌈)
   if (q){
@@ -995,6 +1015,8 @@ function fillPane(n, c){
       + '나중에 두루 인정받으면 *먼저 알아본 당신의 안목*도 함께 쌓입니다 (특허 허브).';
   const endorse = (!n.is_query && !n.is_stub) ? `
       <button class="sec btn-endorse" title="${endorseTip}">👣 나도 밟기</button>
+      ${(n.space && n.space !== 'public' && n.space === space())
+        ? `<button class="sec btn-publish" title="기밀이 기본 — 공개는 명시적 선택입니다">🌐 공용에 공개</button>` : ''}
       <span class="prov end-out"></span>` : '';
   const stubFill = n.is_stub ? `
     <div class="row"><button class="btn-fill">🪄 AI로 이 개념 채우기</button>
@@ -1084,6 +1106,15 @@ function fillPane(n, c){
     document.body.appendChild(pop);
     setTimeout(()=> document.addEventListener('click', ()=> pop.remove(), {once:true}));
   });
+  const pub = c.querySelector('.btn-publish');
+  if (pub) pub.onclick = async ()=>{
+    if (!confirm('이 글을 공용 커먼즈에 공개합니다 — 그룹 밖 모두가 보게 됩니다. 계속할까요?')) return;
+    try{
+      await api('POST', `/api/nodes/${encodeURIComponent(n.id)}/publish`, {author: me()});
+      toast('🌐 공용 커먼즈에 공개됐습니다');
+      refreshPane(c);
+    }catch(e){ alert(e.message); }
+  };
   const rv = c.querySelector('.btn-revalid');
   if (rv) rv.onclick = async ()=>{
     try{

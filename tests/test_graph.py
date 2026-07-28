@@ -78,9 +78,14 @@ def test_layers_one_way_visibility():
     # a public viewer never sees the group contribution
     public_ids = {n.id for n in t.visible_nodes("public")}
     assert "g1" not in public_ids and "q1" in public_ids
-    # a team-a viewer sees public ∪ team-a
+    # 노트 25 하이브리드: 그룹의 *자기 공간*은 그룹 것 + 들여온 공용만.
+    # 공용 q1은 아직 안 들여왔으니 목록엔 없지만, 읽기 권한은 있다.
     team_ids = {n.id for n in t.visible_nodes("team-a")}
-    assert "g1" in team_ids and "q1" in team_ids
+    assert "g1" in team_ids and "q1" not in team_ids
+    assert t._visible(t.nodes["q1"], "team-a")          # 열람은 가능(공용이므로)
+    # 그룹 발자국으로 밟는 순간 공간에 들어온다
+    t.group_endorse("team-a", "bob", "q1", weight=1.0)
+    assert "q1" in {n.id for n in t.visible_nodes("team-a")}
 
 
 def test_contribution_inherits_parent_layer_by_default():

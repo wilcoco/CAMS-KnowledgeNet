@@ -293,15 +293,15 @@ class OntologyTree:
     # -- creation --------------------------------------------------------------
     def add_root(
         self, node_id: str, question: str, answer: str, author: str,
-        stake: float = 0.0,
+        stake: float = 0.0, space: str = "public",
     ) -> Node:
         """Open a brand-new question thread with its first answer.
 
-        A ROOT is a **concept**: it owns the global ``slug`` address and is the
-        shared commons coordinate everyone resolves ``[[Title]]`` to. Concept
-        identity is therefore always **public** — privacy lives in the *overlays*
-        (group contributions/endorsements), never in the concept itself. See
-        ``docs/design/05-private-public-endorse.md``.
+        공용 ROOT는 전역 slug 주소를 갖는 커먼즈 좌표다(노트 05). **그룹에서
+        만든 ROOT는 그룹 소유(space=그룹)** — 기밀 기본(노트 25). 그룹 루트의
+        id는 `그룹::슬러그`로 네임스페이스되어 공용 주소를 점유하지 않고,
+        본문의 [[참조]]는 여전히 공용 앵커로 해소된다(참조=공용, 소유=그룹).
+        "공용에 공개"는 명시적 publish 행위로만.
         """
         if node_id in self.nodes:
             raise OntologyError(f"node {node_id!r} already exists")
@@ -314,7 +314,7 @@ class OntologyTree:
             stake=stake,
             value_add=True,
             created_at=self._tick(),
-            space="public",
+            space=space,
         )
         self.nodes[node_id] = node
         self._finalize(node)
@@ -598,7 +598,7 @@ class OntologyTree:
     def open_queries(self, space: str | None = None) -> list[Node]:
         return [
             n for n in self.nodes.values()
-            if n.action is Action.QUERY and self._visible(n, space)
+            if n.action is Action.QUERY and self.in_space(n, space)
         ]
 
     # -- frozen answers + edits -----------------------------------------------
@@ -696,12 +696,34 @@ class OntologyTree:
     # -- layers (public commons + group overlays) -----------------------------
     @staticmethod
     def _visible(node: Node, space: str | None) -> bool:
-        """A viewer in ``space`` sees the public commons ∪ that space.
+        """READ permission: a viewer in ``space`` may open commons ∪ own space.
 
         ``space=None`` disables filtering (admin/tests). One-way membrane: a group
-        node may reference public, but a public viewer never sees a group node.
+        node may reference public, but a public viewer never reads a group node.
+        NB: *열람 가능*과 *내 공간에 속함*은 다르다 — 목록·검색·랭킹·지도는
+        :meth:`in_space` 를 쓴다 (노트 25 하이브리드 그룹).
         """
         return space is None or node.space == "public" or node.space == space
+
+    def group_adopted(self, space: str, node_id: str) -> bool:
+        """그룹원이 그룹 발자국으로 이 공용 노드를 *들여왔는가* (노트 25)."""
+        eng = self.group_scoring.get(space)
+        return bool(eng and eng._linkers.get(node_id))
+
+    def in_space(self, node: Node, space: str | None) -> bool:
+        """이 노드가 ``space``의 *자기 화면*(검색·트리·랭킹·지도)에 속하는가.
+
+        공용 뷰 = 공용 노드. **그룹 뷰 = 그룹이 만든 것 + 그룹 발자국으로
+        들여온 공용 노드** — 새 그룹은 빈 공간에서 시작한다(노트 25). 공용
+        커먼즈는 사라진 게 아니라 사다리의 명시적 계단(공용에서 찾기)으로 남고,
+        밟는 순간 이 공간에 들어온다. 읽기 권한은 :meth:`_visible` 그대로.
+        """
+        if space is None:
+            return True
+        if not self._is_group(space):
+            return node.space == "public"
+        return node.space == space or (
+            node.space == "public" and self.group_adopted(space, node.id))
 
     # -- multi-currency endorse (public commons coin + per-group coin) ---------
     @staticmethod
@@ -887,19 +909,20 @@ class OntologyTree:
         ranked = sorted(
             ((n, self.authority_in(n.id, space))
              for n in self.nodes.values()
-             if not n.is_stub and self._visible(n, space)),
+             if not n.is_stub and self.in_space(n, space)),
             key=lambda na: -na[1],
         )
         self._board_cache[space] = (self._rev, ranked)
         return ranked
 
     def visible_nodes(self, space: str | None = None) -> list[Node]:
-        return [n for n in self.nodes.values() if self._visible(n, space)]
+        """공간 *소속* 노드(목록·트리·랭킹·통계용) — 읽기 권한과 다르다."""
+        return [n for n in self.nodes.values() if self.in_space(n, space)]
 
     def backlinks(self, slug: str, space: str | None = None) -> list[Node]:
         return [
             n for n in self.nodes.values()
-            if slug in n.links and self._visible(n, space)
+            if slug in n.links and self.in_space(n, space)
         ]
 
     # -- search ----------------------------------------------------------------
@@ -926,7 +949,7 @@ class OntologyTree:
         # contribution never surfaces to public via search — without an O(N) scan.
         def visible(doc_id: str) -> bool:
             n = self.nodes.get(doc_id)
-            return n is not None and not n.is_stub and self._visible(n, space)
+            return n is not None and not n.is_stub and self.in_space(n, space)
 
         hits = index.query(q, is_allowed=visible, limit=limit * 4)
         if not hits:
