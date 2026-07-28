@@ -986,3 +986,15 @@ def test_byok_key_bypasses_quota_without_server_storage(client, monkeypatch):
     from nightwish import unified as u
     snap = _json.dumps(u.get_service().tree.to_json(), ensure_ascii=False)
     assert "sk-test-own-key" not in snap
+
+
+def test_full_view_includes_parent_for_ego_graph(client):
+    """연결 지도(에고 그래프)용 — full 뷰에 원답(부모) 정보가 실린다."""
+    root = client.post("/api/ask", json={"question": "부모 확인", "author": "a"}).json()["node"]["id"]
+    client.post(f"/api/nodes/{root}/contribute",
+                json={"kind": "fork", "author": "b", "body": "다른 답"})
+    th = client.get(f"/api/nodes/{root}").json()["thread"]
+    fork_id = next(x["id"] for x in th if x["kind"] == "fork")
+    v = client.get(f"/api/nodes/{fork_id}").json()
+    assert v["parent"] and v["parent"]["id"] == root and "부모 확인" in v["parent"]["title"]
+    assert client.get(f"/api/nodes/{root}").json()["parent"] is None

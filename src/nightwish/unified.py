@@ -637,6 +637,10 @@ def _node_view(svc: UnifiedService, node_id: str, space: str, *, full: bool = Fa
         for cid in n.children)
     view["conditions"] = list(n.conditions)
     if full:
+        # 연결 지도(에고 그래프)용 — 이 답이 매달린 원답(부모)
+        p = t.nodes.get(n.parent_id) if n.parent_id else None
+        view["parent"] = ({"id": p.id, "title": p.question or "(답)"}
+                          if p is not None and t._visible(p, space) else None)
         # 발견 순서(노트 17 §3 'n번째 발견자') — 순서가 곧 자산임을 보드처럼
         view["walk_order"] = t.scoring.link_order(n.id)[:50]
         view["thread"] = _thread(svc, n.id, space)
