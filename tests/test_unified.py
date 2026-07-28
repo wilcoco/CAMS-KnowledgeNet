@@ -998,3 +998,23 @@ def test_full_view_includes_parent_for_ego_graph(client):
     v = client.get(f"/api/nodes/{fork_id}").json()
     assert v["parent"] and v["parent"]["id"] == root and "부모 확인" in v["parent"]["title"]
     assert client.get(f"/api/nodes/{root}").json()["parent"] is None
+
+
+def test_ego_endpoint_expands_by_depth(client):
+    """연결 지도 깊이 조절 — /ego가 depth만큼 BFS 확장(국소·상한 80)."""
+    root = client.post("/api/ask", json={"question": "에고 중심", "author": "a"}).json()["node"]["id"]
+    client.post(f"/api/nodes/{root}/contribute",
+                json={"kind": "comment", "author": "b", "body": "[[에고 개념]] 참고 보강"})
+    # 개념을 실체화 → 그 개념이 또 다른 곳과 연결
+    client.post("/api/nodes", json={"title": "에고 개념", "body": "개념 본문 [[더 먼 개념]]",
+                                    "author": "c"})
+    d1 = client.get(f"/api/nodes/{root}/ego?depth=1").json()
+    d2 = client.get(f"/api/nodes/{root}/ego?depth=2").json()
+    ids1 = {x["id"] for x in d1["nodes"]}
+    ids2 = {x["id"] for x in d2["nodes"]}
+    assert d1["center"] == root and root in ids1
+    assert ids1 < ids2                       # 깊이 2가 순증가
+    assert "에고-개념" in ids2                 # 보강(1단계)의 링크(2단계)까지
+    assert all("label" in e for e in d2["edges"])
+    # depth는 1~3으로 클램프
+    assert client.get(f"/api/nodes/{root}/ego?depth=9").json()["depth"] == 3

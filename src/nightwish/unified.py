@@ -1225,6 +1225,70 @@ def create_app() -> FastAPI:
                 "target": _node_view(svc, target_slug, body.space, full=True),
             }
 
+    @app.get("/api/nodes/{node_id}/ego")
+    def ego(node_id: str, depth: int = 1, space: str = "public"):
+        """연결 지도용 다층 이웃(BFS) — depth 1~3, 노드 상한 80 (한 번의 질의).
+
+        간선 라벨 = 판단된 의미(노트 16 릴레이션·기여 종류·원답·역링크). 깊이를
+        늘려도 전역 그래프를 읽지 않는다 — 국소 확장(노트 12)만.
+        """
+        svc = get_service()
+        depth = max(1, min(depth, 3))
+        with svc.reading():
+            t = svc.tree
+            root = t.nodes.get(node_id)
+            if root is None or not t._visible(root, space):
+                raise HTTPException(404, f"node {node_id!r} not found")
+            kind_lbl = {"contribute": "보강", "fork": "정정", "query": "후속",
+                        "follow": "계승", "root": "관련"}
+            nodes = {node_id: {"id": node_id, "title": root.question or "(답)",
+                               "d": 0, "kind": ""}}
+            edges, seen_e = [], set()
+            MAX_NODES = 80
+
+            def neigh(nid):
+                n = t.nodes[nid]
+                out = []
+                if n.parent_id:
+                    p = t.nodes.get(n.parent_id)
+                    if p is not None and t._visible(p, space):
+                        out.append((p.id, "원답", p))
+                for cid in n.children:
+                    c = t.nodes.get(cid)
+                    if c is not None and t._visible(c, space):
+                        out.append((cid, kind_lbl.get(c.action.value, "기여"), c))
+                for s in n.links:
+                    tg = t.nodes.get(s)
+                    if tg is not None and t._visible(tg, space):
+                        out.append((s, _rel_view(n, s)["rel"] or "관련", tg))
+                for b in t.backlinks(n.slug or nid, space):
+                    if b.id != nid:
+                        out.append((b.id, "역링크", b))
+                return out
+
+            frontier = [node_id]
+            for d in range(depth):
+                nxt = []
+                for nid in frontier:
+                    for mid, lbl, m in neigh(nid):
+                        ek = tuple(sorted((nid, mid)))
+                        if ek not in seen_e and mid != nid:
+                            seen_e.add(ek)
+                            edges.append({"a": nid, "b": mid, "label": lbl})
+                        if mid not in nodes:
+                            if len(nodes) >= MAX_NODES:
+                                continue
+                            nodes[mid] = {
+                                "id": mid,
+                                "title": (m.question or (m.answer or "").strip()[:24]
+                                          or "(답)"),
+                                "d": d + 1, "kind": lbl, "is_stub": m.is_stub,
+                            }
+                            nxt.append(mid)
+                frontier = nxt
+            return {"center": node_id, "depth": depth,
+                    "nodes": list(nodes.values()), "edges": edges}
+
     @app.post("/api/nodes/{node_id}/relate")
     def relate(node_id: str, body: RelateBody):
         """링크에 시멘틱 릴레이션 타입을 *확인*한다 (노트 16).
