@@ -1227,13 +1227,16 @@ def create_app() -> FastAPI:
 
     @app.get("/api/nodes/{node_id}/ego")
     def ego(node_id: str, depth: int = 1, space: str = "public"):
-        """연결 지도용 다층 이웃(BFS) — depth 1~3, 노드 상한 80 (한 번의 질의).
+        """연결 지도용 다층 이웃(BFS) — depth 1~6, 노드 상한 깊이 비례 (한 번의 질의).
+
+        클라이언트는 depth=3을 기본으로 받아 1~3단계를 필터로 즉시 전환하고,
+        4단계 이상을 고를 때만 다시 요청한다(다운로드 최소화).
 
         간선 라벨 = 판단된 의미(노트 16 릴레이션·기여 종류·원답·역링크). 깊이를
         늘려도 전역 그래프를 읽지 않는다 — 국소 확장(노트 12)만.
         """
         svc = get_service()
-        depth = max(1, min(depth, 3))
+        depth = max(1, min(depth, 6))
         with svc.reading():
             t = svc.tree
             root = t.nodes.get(node_id)
@@ -1241,40 +1244,49 @@ def create_app() -> FastAPI:
                 raise HTTPException(404, f"node {node_id!r} not found")
             kind_lbl = {"contribute": "보강", "fork": "정정", "query": "후속",
                         "follow": "계승", "root": "관련"}
+            def walkers(nid):
+                return len(t.scoring._linkers.get(nid, []))
+
             nodes = {node_id: {"id": node_id, "title": root.question or "(답)",
-                               "d": 0, "kind": ""}}
+                               "d": 0, "kind": "", "w": walkers(node_id),
+                               "auth": round(t.authority_in(node_id, space), 2)}}
             edges, seen_e = [], set()
-            MAX_NODES = 80
+            MAX_NODES = 60 + 30 * depth      # 깊이 비례 상한 (6단계=240)
 
             def neigh(nid):
                 n = t.nodes[nid]
                 out = []
+                # (대상, 라벨, 노드, 간선가중치) — 링크는 타입 *확인자 수*,
+                # 기여(보강·정정 등)는 그 기여가 받은 *발자국 수* = 투자의 두께
                 if n.parent_id:
                     p = t.nodes.get(n.parent_id)
                     if p is not None and t._visible(p, space):
-                        out.append((p.id, "원답", p))
+                        out.append((p.id, "원답", p, walkers(nid)))
                 for cid in n.children:
                     c = t.nodes.get(cid)
                     if c is not None and t._visible(c, space):
-                        out.append((cid, kind_lbl.get(c.action.value, "기여"), c))
+                        out.append((cid, kind_lbl.get(c.action.value, "기여"), c,
+                                    walkers(cid)))
                 for s in n.links:
                     tg = t.nodes.get(s)
                     if tg is not None and t._visible(tg, space):
-                        out.append((s, _rel_view(n, s)["rel"] or "관련", tg))
+                        rv = _rel_view(n, s)
+                        out.append((s, rv["rel"] or "관련", tg, rv["rel_n"]))
                 for b in t.backlinks(n.slug or nid, space):
                     if b.id != nid:
-                        out.append((b.id, "역링크", b))
+                        out.append((b.id, "역링크", b, 0))
                 return out
 
             frontier = [node_id]
             for d in range(depth):
                 nxt = []
                 for nid in frontier:
-                    for mid, lbl, m in neigh(nid):
+                    for mid, lbl, m, ew in neigh(nid):
                         ek = tuple(sorted((nid, mid)))
                         if ek not in seen_e and mid != nid:
                             seen_e.add(ek)
-                            edges.append({"a": nid, "b": mid, "label": lbl})
+                            edges.append({"a": nid, "b": mid, "label": lbl,
+                                          "w": ew})
                         if mid not in nodes:
                             if len(nodes) >= MAX_NODES:
                                 continue
@@ -1283,6 +1295,8 @@ def create_app() -> FastAPI:
                                 "title": (m.question or (m.answer or "").strip()[:24]
                                           or "(답)"),
                                 "d": d + 1, "kind": lbl, "is_stub": m.is_stub,
+                                "w": walkers(mid),
+                                "auth": round(t.authority_in(mid, space), 2),
                             }
                             nxt.append(mid)
                 frontier = nxt
