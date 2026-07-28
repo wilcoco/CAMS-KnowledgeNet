@@ -975,7 +975,16 @@ async function submitContrib(id, kind, body, btn, pane){
       ()=> api('POST',`/api/nodes/${encodeURIComponent(id)}/contribute`,
         {kind, author:me(), body, space:space()}), btn);
     await refreshStat(); loadScores();
-    refreshPane(pane);   // re-render this pane's thread in place (flow preserved)
+    await refreshPane(pane);   // re-render this pane's thread in place
+    // 새 기여는 패널 하단 스레드에 붙는다 — 다시 그린 뒤 스크롤이 위에 머물면
+    // 방금 쓴 글이 안 보인다. 내가 쓴 항목으로(못 찾으면 맨 아래로) 데려간다.
+    requestAnimationFrame(()=>{
+      const probe = (body || '').trim().slice(0, 40);
+      const mine = probe && [...pane.querySelectorAll('.c')].reverse()
+        .find(el => el.textContent.includes(probe));
+      if (mine) mine.scrollIntoView({behavior:'smooth', block:'center'});
+      else pane.scrollTo({top: pane.scrollHeight, behavior:'smooth'});
+    });
   }catch(e){ alert(e.message); }
 }
 
