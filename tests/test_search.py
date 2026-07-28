@@ -98,3 +98,36 @@ def test_index_rebuilds_lazily_after_load():
     assert rebuilt._search is None
     assert [n.id for n in rebuilt.search("냉각", "public")] == ["b"]
     assert rebuilt._search is not None             # built on first search
+
+
+# ── 다국어 (2026-07): 한/영 불변 + 비한글 문자권 소생 ────────────────────────
+
+def test_slug_invariance_and_multilingual_revival():
+    """기존 한/영 슬러그는 바이트 단위 불변 — DB 주소·링크·재사용 무손상 보증.
+    종전에 'node'로 붕괴하던 문자권(한자·가나·키릴)은 고유 슬러그로 살아난다."""
+    from nightwish.tree import slugify
+    frozen = {                       # 종전 규칙의 출력 스냅샷 (변하면 DB가 깨진다)
+        "용접 방법": "용접-방법",
+        "Welding method": "welding-method",
+        "PP(폴리프로필렌)": "pp-폴리프로필렌",
+        "CRDT가 뭐야": "crdt가-뭐야",
+        "a_b test": "a-b-test",
+    }
+    for title, want in frozen.items():
+        assert slugify(title) == want
+    revived = [slugify(t) for t in ("溶接の方法", "焊接方法", "Способ сварки")]
+    assert "node" not in revived and len(set(revived)) == 3
+
+
+def test_multilingual_content_is_searchable_in_its_language():
+    """일본어/중국어/러시아어 콘텐츠가 자기 언어 질의로 검색된다 (종전 토큰 0=불가)."""
+    t = OntologyTree()
+    t.add_root("ja", "溶接の方法", "アーク溶接の基本手順", "u")
+    t.add_root("zh", "焊接方法", "电弧焊的基本步骤", "u")
+    t.add_root("ru", "Способ сварки", "Основы дуговой сварки", "u")
+    assert [n.id for n in t.search("溶接", "public")][:1] == ["ja"]
+    assert [n.id for n in t.search("焊接", "public")][:1] == ["zh"]
+    assert [n.id for n in t.search("сварки", "public")][:1] == ["ru"]
+    # 한글 검색 동작 불변
+    t.add_root("ko", "용접 방법", "아크 용접 기본", "u")
+    assert "ko" in [n.id for n in t.search("용접", "public")]

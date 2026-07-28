@@ -64,12 +64,27 @@ STUB_AUTHOR = "(stub)"
 ADOPTION_BOOST = 0.05
 
 _LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
-_SLUG_RE = re.compile(r"[^a-z0-9가-힣]+")
 
 
 def slugify(title: str) -> str:
-    """A stable, URL-safe id derived from a human title (CJK preserved)."""
-    s = _SLUG_RE.sub("-", title.strip().lower()).strip("-")
+    """A stable, URL-safe id derived from a human title — 모든 문자권 보존.
+
+    규칙: 유니코드 글자·숫자만 남기고 나머지는 ``-`` 로. **기존 한/영 슬러그
+    완전 불변** — 종전 규칙(``[a-z0-9가-힣]`` 허용)이 통과시키던 입력은 결과가
+    바이트 단위로 같다(허용 집합을 *넓히기만* 함: 한자·가나·키릴 등이 이제
+    살아남는다 — 이전엔 전부 ``node``로 붕괴해 언어째 주소 충돌).
+    밑줄(_)은 종전처럼 구분자로 취급(``isalnum``이 False).
+    """
+    out: list[str] = []
+    dash = True                      # 선행 구분자 압축
+    for ch in title.strip().lower():
+        if ch.isalnum():
+            out.append(ch)
+            dash = False
+        elif not dash:
+            out.append("-")
+            dash = True
+    s = "".join(out).rstrip("-")
     return s or "node"
 
 

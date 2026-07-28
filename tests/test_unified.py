@@ -1106,3 +1106,17 @@ def test_google_auth_gates_writes_and_binds_identity(client, monkeypatch):
     finally:
         u.set_google_verifier(None) if False else None
         u._google_verifier = None
+
+
+def test_japanese_question_dedup_and_reuse(client):
+    """다국어 코어: 일본어 질문도 주소가 살아 있어 재사용 사다리가 돈다."""
+    r1 = client.post("/api/ask", json={"question": "溶接の方法", "author": "a"}).json()
+    nid = r1["node"]["id"]
+    assert nid != "node"                       # 슬러그 붕괴 없음
+    client.post("/api/mint", json={"account": "w", "amount": 10})
+    client.post("/api/endorse", json={"account": "w", "node_id": nid, "amount": 1})
+    again = client.post("/api/ask", json={"question": "溶接の方法", "author": "b"}).json()
+    assert again["stage"] == "existing" and again["node"]["id"] == nid
+    # 다른 일본어 질문은 다른 주소 (종전엔 전부 'node'로 충돌)
+    other = client.post("/api/ask", json={"question": "塗装の方法", "author": "c"}).json()
+    assert other["node"]["id"] != nid
