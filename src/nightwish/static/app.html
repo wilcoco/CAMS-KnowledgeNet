@@ -182,7 +182,7 @@
   .err { color:var(--stub); font-size:12px; }
   code { background:#0c0e13; padding:1px 5px; border-radius:4px; }
 </style>
-<link rel="stylesheet" href="/static/knowledge-map.css?v=4" />
+<link rel="stylesheet" href="/static/knowledge-map.css?v=5" />
 </head>
 <body>
 <div id="busy"><span class="spinner"></span> <span id="busy-msg">AI가 답변을 생성하는 중…</span></div>
@@ -318,7 +318,7 @@
   </aside>
 </div>
 
-<script src="/static/knowledge-map.js?v=5"></script>
+<script src="/static/knowledge-map.js?v=6"></script>
 <script>
 const $ = s => document.querySelector(s);
 const api = async (m, url, body) => {
@@ -963,6 +963,7 @@ function threadHTML(list){
       <div class="who"><span class="kind-tag">${tag}</span> · ${esc(c.author)}${frozen}${grpBadge}
         · 권위 ${c.authority}</div>
       ${title}
+      ${targetBadge(c.knowledge_target)}
       <div class="body">${renderText(c.body)}</div>
       ${c.has_knowledge ? `<button class="sec open-knowledge" data-id="${esc(c.id)}">이 답의 개념 지도 보기</button>` : ''}
       ${evalCtrl}
@@ -1091,6 +1092,7 @@ function fillPane(n, c){
     ${n.knowledge && n.knowledge.notice ? `<div class="map-notice">${esc(n.knowledge.notice)}</div>` : ''}
     ${discovererLine(n)}
     ${coauthorsHTML(n.coauthors)}
+    ${targetBadge(n.knowledge_target || (n.knowledge && n.knowledge.focus))}
     ${n.is_query ? '' : (n.is_stub
       ? `<div class="answer prov">아직 비어 있는 개념입니다 — 위키링크로 자리만 잡혔어요. 아래 버튼으로 AI 정리를 생성하세요.</div>`
       : `<div class="answer${n.answer_html ? ' markdown-answer' : ''}">${n.answer_html || renderText(n.answer)}</div>`)}
@@ -1273,6 +1275,7 @@ function showReply(id, act, pane){
   // break CSS id selectors, so match data-rid by value)
   const box = [...pane.querySelectorAll('.reply')].find(r => r.dataset.rid === id);
   if (!box) return;
+  box._mapTarget=null;
   const ph = {comment:'보강할 의견 — 웹 링크(URL) 붙여넣어도 됩니다',
               fork:'왜 기존 답이 틀렸나(반례·실측·적용 조건) + 교정된 답 — 근거 URL 환영. 이유가 남아야 틀린 답이 부활하지 못합니다',
               followup:'후속 질문'}[act];
@@ -1282,16 +1285,17 @@ function showReply(id, act, pane){
       <button class="sec" data-cancel>취소</button></div>`;
   const goBtn = box.querySelector('[data-go]');
   goBtn.onclick = ()=> submitContrib(id, act, box.querySelector('textarea').value, goBtn, pane);
-  box.querySelector('[data-cancel]').onclick = ()=> box.innerHTML='';
+  box.querySelector('[data-cancel]').onclick = ()=> {box._mapTarget=null;box.innerHTML='';};
 }
 
 async function submitContrib(id, kind, body, btn, pane){
+  const map_target=btn.closest('.reply')._mapTarget||null;
   // a follow-up asks the AI for a fresh answer → slow; the rest are instant
   const msg = kind==='followup' ? 'AI가 후속 답변을 생성하는 중…' : '처리 중…';
   try{
     await withBusy(msg,
       ()=> api('POST',`/api/nodes/${encodeURIComponent(id)}/contribute`,
-        {kind, author:me(), body, space:space(), with_knowledge:kind==='followup'}), btn);
+        {kind, author:me(), body, space:space(), with_knowledge:kind==='followup',map_target}), btn);
     await refreshStat(); loadScores();
     await refreshPane(pane);   // re-render this pane's thread in place
     // 새 기여는 패널 하단 스레드에 붙는다 — 다시 그린 뒤 스크롤이 위에 머물면

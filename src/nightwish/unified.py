@@ -27,7 +27,7 @@ import re
 import threading
 from html import unescape
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Literal
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
@@ -275,7 +275,7 @@ def _charge_gen_quota(svc: "UnifiedService", author: str) -> None:
 
 def _ask_with_knowledge(svc, question: str, sources: list[dict], author: str,
                         api_key: str = "", *, background: str = "",
-                        web_search: bool = False) -> tuple[str, dict]:
+                        web_search: bool = False, focus: dict | None = None) -> tuple[str, dict]:
     from datetime import date
     from nightwish import knowledge
 
@@ -289,7 +289,7 @@ def _ask_with_knowledge(svc, question: str, sources: list[dict], author: str,
     try:
         # No service/DB lock is held while waiting for the provider.
         return knowledge.generate(question, sources, api_key=api_key,
-                                  background=background, web_search=web_search)
+                                  background=background, web_search=web_search, focus=focus)
     except Exception as exc:
         if charged:
             with svc._lock:
@@ -598,6 +598,13 @@ class PageBody(BaseModel):
     space: str = "public"
 
 
+class MapTargetBody(BaseModel):
+    kind: Literal["concept", "relation"]
+    id: str = Field(min_length=1, max_length=32)
+    revision: str = Field(min_length=64, max_length=64)
+    purpose: Literal["question", "evidence", "condition", "counterexample"]
+
+
 class ContribBody(BaseModel):
     kind: str = "comment"  # comment | fork | follow | followup | unfold
     author: str = Field(min_length=1)
@@ -606,6 +613,7 @@ class ContribBody(BaseModel):
     #: contextual unfold (노트 07): the parent text span being elaborated inline
     anchor: str = ""
     with_knowledge: bool = False
+    map_target: MapTargetBody | None = None
 
 
 class RelateBody(BaseModel):
@@ -743,6 +751,9 @@ def _node_view(svc: UnifiedService, node_id: str, space: str, *, full: bool = Fa
     view["conditions"] = list(n.conditions)
     if full:
         view["knowledge"] = n.knowledge
+        from nightwish.knowledge import map_revision
+        view["knowledge_revision"] = map_revision(n.knowledge)
+        view["knowledge_target"] = n.knowledge.get("contribution_target")
         from nightwish.rendering import render_answer
         view["answer_html"] = render_answer(view["answer"])
         # 연결 지도(에고 그래프)용 — 이 답이 매달린 원답(부모)
@@ -787,7 +798,8 @@ def _thread(svc: UnifiedService, node_id: str, space: str) -> list[dict]:
         out.append({
             "id": child.id, "kind": child.action.value, "author": child.author,
             "title": child.question, "body": child.answer,
-            "has_knowledge": bool(child.knowledge),
+            "has_knowledge": child.knowledge.get("version") == 1,
+            "knowledge_target": child.knowledge.get("contribution_target"),
             "frozen": child.frozen, "model": child.model, "space": child.space,
             "authority": round(t.authority_in(child.id, space), 4),
             "staked": round(sum(svc.econ.staked_on(child.id).values()), 4),
@@ -1289,11 +1301,16 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "후속질문 내용이 필요합니다")
         if kind == "unfold" and not body.anchor.strip():
             raise HTTPException(400, "펼칠 구절(anchor)이 필요합니다")
+        if body.map_target:
+            expected_kind = "followup" if body.map_target.purpose == "question" else "comment"
+            if kind != expected_kind or not body.body.strip():
+                raise HTTPException(400, "선택한 참여 방식에 맞는 내용을 입력해 주세요.")
         # A follow-up / unfold AI answer is a slow network call: do it OUTSIDE the
         # lock, but first anchor it to the parent chain so it answers *in context*.
         ai_text = None
         knowledge = {}
-        if kind in ("followup", "unfold"):
+        target = None
+        if kind in ("followup", "unfold") or body.map_target:
             from nightwish import db, pgstore
 
             url = db.database_url()
@@ -1307,6 +1324,17 @@ def create_app() -> FastAPI:
                 raise HTTPException(404, f"node {node_id!r} not found")
             if not ctx_tree._visible(ctx_tree.nodes[node_id], body.space):
                 raise HTTPException(404, f"node {node_id!r} not found")
+            if body.map_target:
+                from nightwish.knowledge import map_revision, contribution_target
+                current_map = ctx_tree.nodes[node_id].knowledge
+                if map_revision(current_map) != body.map_target.revision:
+                    raise HTTPException(409, "개념 지도가 변경되었습니다. 답변을 다시 열고 선택해 주세요.")
+                try:
+                    target = contribution_target(current_map, body.map_target.kind, body.map_target.id)
+                except (ValueError, KeyError):
+                    raise HTTPException(400, "이 지도에 없는 개념·관계입니다.") from None
+                target.update(node_id=node_id, revision=body.map_target.revision,
+                              purpose=body.map_target.purpose)
             if kind == "unfold":
                 span = body.anchor.strip()
                 q = body.body.strip() or f'"{span}" — 이 맥락에서 자세히 설명'
@@ -1314,7 +1342,7 @@ def create_app() -> FastAPI:
                 q = body.body
             ai_text = None
             if kind in ("followup", "unfold"):     # 생성을 쓰는 kind만 — 쿼터 게이트
-                if body.with_knowledge:
+                if body.with_knowledge or target:
                     sources = []
                     background = ""
                     cur = ctx_tree.nodes[node_id]
@@ -1330,8 +1358,21 @@ def create_app() -> FastAPI:
                         cur = ctx_tree.nodes.get(cur.parent_id)
                         if cur is None:
                             break
+                    if target:
+                        # Carry visible human additions on this exact structure into
+                        # the next question, without pulling in unrelated comments.
+                        additions = []
+                        for child in ctx_tree.children_of(node_id):
+                            ref = child.knowledge.get("contribution_target") or {}
+                            if (ctx_tree._visible(child, body.space) and child.answer.strip()
+                                    and all(ref.get(k) == target[k] for k in ("node_id", "revision", "kind", "id"))):
+                                additions.append({"id": child.id, "title": ref["label"],
+                                    "excerpt": child.answer[:4000], "author": child.author,
+                                    "model": child.model, "updated_at": child.updated_at,
+                                    "selection": "conversation", "purpose": ref["purpose"]})
+                        sources.extend(additions[-5:])
                     ai_text, knowledge = _ask_with_knowledge(svc, q, sources, body.author,
-                                                             background=background)
+                                                             background=background, focus=target)
                 else:
                     _charge_gen_quota(svc, body.author)
                     ai_text = _ask_ai(q, _anchor_prompt(ctx_tree, node_id))
@@ -1369,6 +1410,8 @@ def create_app() -> FastAPI:
                     svc.tree.contribute(qid, node_id, body.author, answer="",
                                         stake=0.0, question=body.body,
                                         value_add=True, space=body.space)
+                    if target:
+                        svc.tree.nodes[qid].knowledge = {"contribution_target": target}
                     aid = svc._child_id(qid)
                     svc.tree.contribute(aid, qid, "AI", ai_text,
                                         stake=0.0, space=body.space)
@@ -1392,6 +1435,8 @@ def create_app() -> FastAPI:
                     svc.tree.contribute(cid, node_id, body.author,
                                         body.body, stake=0.0, value_add=False,
                                         space=body.space)
+                    if target:
+                        svc.tree.nodes[cid].knowledge = {"contribution_target": target}
                     _self_footprint(svc, cid, body.author)
             except OntologyError as e:
                 raise HTTPException(400, str(e))
@@ -1568,6 +1613,7 @@ def create_app() -> FastAPI:
                                   and source.space == "public"]
                 allowed = {s["id"] for s in public_sources}
                 n.knowledge = {**n.knowledge, "sources": public_sources, "background": "",
+                               "focus": None, "contribution_target": None,
                                "relations": [r for r in n.knowledge.get("relations", [])
                                              if r["origin"] != "source" or r["source_id"] in allowed]}
             n.last_editor = body.author

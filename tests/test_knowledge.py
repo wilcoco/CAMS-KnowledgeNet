@@ -35,6 +35,7 @@ def fake_generate(question, sources, **kwargs):
                                            if all(s.get('selection')=='conversation' for s in sources)
                                            else 'user_selected'),
                            "background": kwargs.get("background", ""),
+                           "focus": kwargs.get("focus"),
                            "sources": copy.deepcopy(sources)}
 
 
@@ -347,3 +348,75 @@ def test_graph_failure_retains_complete_answer_and_private_context_never_enters_
     assert answer_requests[0]['background']=='팀의 목표'
     assert answer==ANSWER and k['concepts']==[] and k['notice']
     assert k['research_status']=='unavailable'
+
+
+def map_target(node, purpose='condition', kind='concept', target_id='club'):
+    return {'kind':kind,'id':target_id,'purpose':purpose,'revision':node['knowledge_revision']}
+
+
+def test_structured_human_addition_is_persisted_without_changing_the_ai_map(client):
+    n=ask(client).json()['node']
+    r=client.post('/api/nodes/'+n['id']+'/contribute',json={
+        'author':'현장 사용자','kind':'comment','body':'야간 근무자에게는 온라인 참여가 필요했습니다.',
+        'map_target':map_target(n)})
+    assert r.status_code==200, r.text
+    updated=r.json(); c=updated['thread'][-1];target=c['knowledge_target']
+    assert target['label']=='독서 모임' and target['quote']==QUESTION
+    assert target['purpose']=='condition' and target['node_id']==n['id']
+    assert not c['has_knowledge'] and not c['frozen']
+    assert updated['knowledge']==n['knowledge'] and updated['staked']==n['staked']
+    snap=pgstore.rows_to_snapshot(pgstore.snapshot_to_rows(client.svc._snapshot()))
+    tree=OntologyTree.from_json(snap['tree'])
+    assert tree.nodes[c['id']].knowledge['contribution_target']==target
+    fresh=client.get('/api/nodes/'+n['id']).json()
+    assert fresh['thread'][-1]['knowledge_target']==target
+
+
+def test_relation_followup_uses_exact_focus_and_only_visible_matching_human_additions(client, monkeypatch):
+    n=ask(client).json()['node']
+    route='/api/nodes/'+n['id']+'/contribute'
+    for body,purpose,kind,tid,space in [
+        ('우리 모임에서는 교대근무가 중요한 조건입니다.','condition','relation','0','public'),
+        ('관계와 무관한 다른 개념의 경험','evidence','concept','people','public'),
+        ('공개하면 안 되는 그룹의 경험','counterexample','relation','0','secret')]:
+        assert client.post(route,json={'author':'참여자','kind':'comment','body':body,'space':space,
+            'map_target':map_target(n,purpose,kind,tid)}).status_code==200
+    captured=[]
+    def generate(q,sources,**kw):
+        captured.append((sources,kw))
+        return fake_generate(q,sources,**kw)
+    monkeypatch.setattr(knowledge,'generate',generate)
+    r=client.post(route,json={'author':'질문자','kind':'followup','body':'실제 적용 방법은?',
+        'map_target':map_target(n,'question','relation','0')})
+    assert r.status_code==200,r.text
+    sources,kw=captured[0]
+    assert kw['focus']['label']=='독서 모임 → 관련된다 → 참여자'
+    assert kw['focus']['quote']=='독서 모임은 참여자의 경험을 듣고'
+    assert any('교대근무' in s['excerpt'] for s in sources)
+    assert '다른 개념의 경험' not in str(sources) and '그룹의 경험' not in str(sources)
+    question=r.json()['thread'][-1]
+    assert question['knowledge_target']['purpose']=='question'
+    assert not question['has_knowledge'] and question['replies'][0]['has_knowledge']
+    ai=client.get('/api/nodes/'+question['replies'][0]['id']).json()
+    assert ai['knowledge']['focus']==kw['focus']
+
+
+def test_stale_or_forged_targets_fail_before_generation(client, monkeypatch):
+    n=ask(client).json()['node']
+    def fail(*a,**kw): pytest.fail('invalid target reached model')
+    monkeypatch.setattr(knowledge,'generate',fail)
+    route='/api/nodes/'+n['id']+'/contribute'
+    for target,status in [({**map_target(n,'question'),'revision':'0'*64},409),
+                          (map_target(n,'question',target_id='forged'),400),
+                          (map_target(n,'question','relation','99'),400)]:
+        assert client.post(route,json={'author':'q','kind':'followup','body':'왜?',
+                                       'map_target':target}).status_code==status
+    assert client.post(route,json={'author':'q','kind':'comment','body':'의견',
+                                  'map_target':map_target(n,'question')}).status_code==400
+
+
+def test_private_target_is_not_available_in_public_space(client):
+    n=ask(client,space='secret').json()['node']
+    r=client.post('/api/nodes/'+n['id']+'/contribute',json={
+        'author':'x','kind':'comment','body':'의견','map_target':map_target(n)})
+    assert r.status_code==404
