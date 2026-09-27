@@ -236,9 +236,9 @@
         <button id="btn-ask" class="sec" title="3계단(마지막) — 기존·종합으로 안 되면 프런티어 AI가 새 초안 생성">✨ 새 답 생성</button>
         <label class="prov" style="margin-left:auto;cursor:pointer" title="사람이 가려낸(채택) 답을 위로"><input type="checkbox" id="sort-adopted" style="vertical-align:middle"> 채택 우선</label>
       </div>
-      <div id="results"></div>
       <a id="google-search" hidden target="_blank" rel="noopener noreferrer">Google에서 직접 검색 ↗</a>
       <div id="map-sources"></div>
+      <div id="results"></div>
 
       <h2 class="sec">열린 질의 <button class="link" id="new-query">+ 새 질의</button></h2>
       <div id="query-form" style="display:none">
@@ -369,9 +369,10 @@ function renderText(t){
 async function refreshStat(){
   const s = await api('GET','/api/state');
   const p = s.persistence || {};
+  const durable = (p.backend || '').startsWith('postgres');
   let store;
-  if (p.backend === 'postgres' && p.db_ok !== false) store = '🟢 DB저장';
-  else if (p.backend === 'postgres') store = '🔴 DB오류';
+  if (durable && p.db_ok !== false) store = '🟢 DB저장';
+  else if (durable) store = '🔴 DB오류';
   else store = '🟡 임시(유실위험)';
   const ai = s.ai || {};
   const aiTag = ai.active ? `🤖 ${ai.model}` : '🤖 오프라인스텁';
@@ -379,7 +380,7 @@ async function refreshStat(){
   const saved = p.last_saved_at ? ` · 저장 ${p.last_saved_at.slice(0,19)}` : '';
   el.textContent =
     `노드 ${s.node_count} · 질의 ${s.query_count} · ${s.hub_mode} · ${store}${saved} · ${aiTag}`;
-  el.title = [p.error || p.hint || (p.backend==='postgres' ? `Postgres 영속 · 마지막 저장 ${p.last_saved_at||'?'}` : ''),
+  el.title = [p.error || p.hint || (durable ? `Postgres 영속 · 마지막 저장 ${p.last_saved_at||'?'}` : ''),
               ai.hint].filter(Boolean).join('\n');
   loadTree();      // 노드 생성·평가 등으로 상태가 바뀌면 트리도 갱신(노트 09)
   loadMeStats();   // 점유율도 갱신(노트 10 B)
@@ -1627,7 +1628,10 @@ $('#btn-invite').onclick = doInvite;
   showOnboard();
   await refreshStat(); reloadAll(); updateLayerHint();
   const nodeId = new URLSearchParams(location.search).get('node');
-  if (nodeId) { try { await openNode(nodeId); } catch(e) { toast('이 답을 열 수 없습니다.'); } }
+  if (nodeId) { try {
+    const n = await fetchNode(nodeId); $('#search').value = n.title;
+    await doSearch(); renderNode(n);
+  } catch(e) { toast('이 답을 열 수 없습니다.'); } }
 })();
 </script>
 </body>
