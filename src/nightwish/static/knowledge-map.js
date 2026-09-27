@@ -14,6 +14,37 @@ function mapEl(tag, text, cls){
 function mapButton(text, action){
   const el = mapEl('button', text, 'sec'); el.type = 'button'; el.onclick = action; return el;
 }
+const selectedReferences = new Map();
+let referenceQuery = '', referenceSpace = '';
+function syncReferenceSelection(){
+  const query = document.getElementById('search').value.trim();
+  if(query !== referenceQuery || space() !== referenceSpace) selectedReferences.clear();
+  referenceQuery = query; referenceSpace = space(); renderReferenceSelection();
+}
+function renderReferenceSelection(){
+  const box = document.getElementById('selected-sources'); if(!box) return;
+  box.replaceChildren(mapEl('p',selectedReferences.size
+    ? `다음 답변에 참고할 내부 지식 ${selectedReferences.size}건`
+    : '선택한 자료 없음 · 새 답변에는 질문만 전달합니다.','prov'));
+  selectedReferences.forEach((title,id)=>box.append(mapButton(title+' ×',()=>{
+    selectedReferences.delete(id);renderReferenceSelection();
+  })));
+  document.querySelectorAll('.reference-check').forEach(c=>{c.checked=selectedReferences.has(c.dataset.sourceId);});
+}
+function referencePicker(n){
+  const label=mapEl('label',undefined,'reference-picker'),input=mapEl('input');
+  input.type='checkbox';input.className='reference-check';input.dataset.sourceId=n.id;
+  input.checked=selectedReferences.has(n.id);
+  label.onclick=e=>e.stopPropagation();
+  input.onchange=()=>{
+    if(input.checked){
+      if(selectedReferences.size>=5){input.checked=false;toast('참고 자료는 최대 5건까지 선택할 수 있습니다.');return;}
+      selectedReferences.set(n.id,n.title);
+    } else selectedReferences.delete(n.id);
+    renderReferenceSelection();
+  };
+  label.append(input,document.createTextNode(' 답변에 참고'));return label;
+}
 function setMobileSection(name){
   document.body.dataset.section = name;
   document.querySelectorAll('[data-section-tab]').forEach(b=>{
@@ -50,9 +81,13 @@ function renderMapSources(n){
   const box = document.getElementById('map-sources'); if (!box) return;
   box.replaceChildren();
   const sources = n && n.knowledge && n.knowledge.sources || [];
-  if (!sources.length) return;
-  box.append(mapEl('h2','이 답변에 제공한 참고 자료','sec'),
-    mapEl('p','생성 당시의 발췌입니다. 자료의 서술도 직접 확인해 주세요.','prov'));
+  if (!n || !n.knowledge || !n.knowledge.version) return;
+  if (!sources.length){box.append(mapEl('p','이 답변은 별도의 내부 자료를 참고하지 않았습니다.','prov'));return;}
+  const mode = n.knowledge.source_mode || (n.parent ? 'conversation' : 'legacy_auto');
+  box.append(mapEl('h2',mode==='user_selected' ? '선택해서 참고한 내부 지식' : mode==='conversation' ? '맥락으로 참고한 이전 대화' : '서비스가 자동 검색으로 참고한 자료','sec'),
+    mapEl('p',mode==='legacy_auto'
+      ? '이전 버전이 자동으로 전달한 내부 문서입니다. 사용자가 첨부한 자료가 아닙니다.'
+      : '생성 당시의 발췌입니다. 자료의 서술도 직접 확인해 주세요.','prov'));
   sources.forEach(s=>{
     const item = mapEl('div',undefined,'map-source'); item.dataset.sourceId = s.id;
     item.append(mapButton(s.title || '이전 대화',()=>{openNode(s.id);setMobileSection('answer');}));
@@ -159,6 +194,8 @@ function renderKnowledge(n){
   return true;
 }
 document.addEventListener('DOMContentLoaded',()=>{
+  document.getElementById('search').addEventListener('input',syncReferenceSelection);
+  renderReferenceSelection();
   document.querySelectorAll('[data-map-mode]').forEach(b=>b.onclick=()=>{knowledgeMode=b.dataset.mapMode;renderEgo(EGO.data);});
   document.querySelectorAll('[data-section-tab]').forEach(b=>b.onclick=()=>setMobileSection(b.dataset.sectionTab));
   setMobileSection('search');

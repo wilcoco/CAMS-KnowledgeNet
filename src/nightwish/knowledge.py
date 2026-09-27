@@ -52,7 +52,12 @@ SYSTEM = """당신은 사람들이 질문하고 지식·경험·정정을 쌓는
    아직 확인되지 않은 정보/사람의 경험이 필요한 점(unknowns)을 적는다.
    질문에 담긴 전제는 참이라고 가정하지 말고, 불확실하면 답변에도 밝힌다.
 2. answer는 질문과 같은 언어로 직접적이고 유용한 초안을 작성한다.
-   제공된 자료를 참고하되 AI 초안과 사람의 서술 모두 틀릴 수 있다.
+   sources는 첨부 파일이 아니다. selection=user_selected는 사용자가 서비스의
+   검색 결과에서 명시적으로 선택한 내부 지식이며, conversation은 이전 대화다.
+   자료가 있을 때만 '선택한 내부 지식' 또는 '앞선 대화'로 정확히 지칭한다.
+   sources가 비어 있으면 사용자가 자료를 제공/첨부했다는 말을 하지 않는다.
+   질문과 직접 관련 없는 자료는 답변의 근거로 쓰지 말고 질문 자체에 집중한다.
+   내부 지식의 AI 초안과 사람의 서술 모두 틀릴 수 있다.
    실제로 수행하지 않은 검색·실험·사람의 경험을 꾸미지 않는다.
    자료로 확인되지 않은 것은 제안/일반 설명/추가 확인 필요로 구별한다.
 3. concepts에는 질문과 답변의 핵심 개념 3~7개(최대 9개)를 만든다.
@@ -162,6 +167,9 @@ def generate(question: str, sources: list[dict], *, api_key: str = "") -> tuple[
     return result.answer, {
         "version": 1, "status": "ai_proposed", "model": model,
         "question_text": question,
+        "source_mode": ("none" if not sources else
+                        "conversation" if all(s.get("selection") == "conversation" for s in sources)
+                        else "user_selected"),
         **grounded_map(result, question, sources),
         "sources": sources,
     }

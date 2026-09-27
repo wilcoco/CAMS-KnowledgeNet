@@ -30,6 +30,9 @@ def fake_generate(question, sources, **kwargs):
     result = knowledge.validate_map(draft(question), question, sources)
     return result.answer, {"version": 1, "status": "ai_proposed", "model": "test-map",
                            "question_text": question, **result.model_dump(exclude={"answer"}),
+                           "source_mode": ('none' if not sources else 'conversation'
+                                           if all(s.get('selection')=='conversation' for s in sources)
+                                           else 'user_selected'),
                            "sources": copy.deepcopy(sources)}
 
 
@@ -103,7 +106,7 @@ def test_private_source_not_sent_to_public_generation(client, monkeypatch):
         received.extend(sources)
         return fake_generate(q, sources, **kw)
     monkeypatch.setattr(knowledge, "generate", capture)
-    n = ask(client).json()["node"]
+    n = ask(client, source_ids=[public['id']]).json()["node"]
     assert any(s['id'] == public['id'] for s in received)
     assert not any(s['id'] == private['id'] for s in received)
     assert "공개하면 안 되는" not in str(n["knowledge"])
@@ -111,8 +114,8 @@ def test_private_source_not_sent_to_public_generation(client, monkeypatch):
 
 def test_source_snapshot_does_not_change_with_later_edit(client):
     data = {"title": "독서 모임", "body": "참여자의 실제 경험", "author": "writer"}
-    client.post('/api/nodes', json=data)
-    n = ask(client).json()["node"]
+    source = client.post('/api/nodes', json=data).json()
+    n = ask(client, source_ids=[source['id']]).json()["node"]
     assert n['knowledge']['sources'][0]['excerpt'] == data['body']
     client.post('/api/nodes', json={**data, 'body': '수정된 경험'})
     assert client.get('/api/nodes/'+n['id']).json()['knowledge']['sources'][0]['excerpt'] == data['body']
@@ -121,7 +124,7 @@ def test_source_snapshot_does_not_change_with_later_edit(client):
 def test_publishing_answer_does_not_publish_private_source_snapshots(client):
     private = client.post('/api/nodes', json={"title": "독서 모임 비밀 기록", "body": "비공개 자료의 내용",
                                              "author": "writer", "space": "secret"}).json()
-    n = ask(client, space='secret').json()['node']
+    n = ask(client, space='secret', source_ids=[private['id']]).json()['node']
     assert any(s['id'] == private['id'] for s in n['knowledge']['sources'])
     with client.svc.writing():
         client.svc.tree.nodes[n['id']].knowledge['relations'][0].update(
@@ -155,6 +158,46 @@ def test_followup_generates_a_map_on_its_own_answer(client):
     k = client.get('/api/nodes/'+answer['id']).json()['knowledge']
     assert k['question_text'] == '독서 모임의 조건은?'
     assert k['sources'][0]['id'] == n['id']
+    assert k['sources'][0]['selection'] == 'conversation'
+
+
+def test_search_results_are_not_implicitly_supplied_to_ai(client, monkeypatch):
+    question = '카파시의 llm위키를 조직에서 사용하는 방법'
+    source = client.post('/api/nodes', json={
+        'title':'Odoo ERP를 사용하는 방법', 'body':'무료 ERP 운영 사례', 'author':'writer'}).json()
+    # The broad search may list a candidate. That is not permission to send it.
+    assert source['id'] in [n['id'] for n in client.get('/api/search',params={'q':question}).json()]
+    received=[]
+    def capture(q, sources, **kw):
+        received.append(sources)
+        return fake_generate(q,sources,**kw)
+    monkeypatch.setattr(knowledge,'generate',capture)
+    r=ask(client,question=question)
+    assert r.status_code==200 and r.json()['node']['knowledge']['sources']==[]
+    assert received==[[]]
+
+
+def test_only_selected_sources_are_sent_with_explicit_provenance(client, monkeypatch):
+    a=client.post('/api/nodes',json={'title':'독서 모임 A','body':'선택한 경험','author':'a'}).json()
+    b=client.post('/api/nodes',json={'title':'독서 모임 B','body':'선택하지 않은 경험','author':'b'}).json()
+    received=[]
+    def capture(q,sources,**kw):
+        received.extend(sources)
+        return fake_generate(q,sources,**kw)
+    monkeypatch.setattr(knowledge,'generate',capture)
+    assert ask(client,source_ids=[a['id'],a['id']]).status_code==200
+    assert [s['id'] for s in received]==[a['id']]
+    assert received[0]['selection']=='user_selected'
+    assert b['id'] not in str(received)
+
+
+def test_private_selected_source_is_rejected_before_generation(client, monkeypatch):
+    p=client.post('/api/nodes',json={'title':'비밀','body':'팀의 경험','author':'a','space':'secret'}).json()
+    def fail(*a,**kw): pytest.fail('private document reached the provider')
+    monkeypatch.setattr(knowledge,'generate',fail)
+    assert ask(client,source_ids=[p['id']]).status_code==404
+    assert ask(client,source_ids=['does-not-exist']).status_code==404
+    assert ask(client,source_ids=['x']*6).status_code==422
 
 
 def test_inaccessible_followup_is_rejected_before_provider(client, monkeypatch):
@@ -183,6 +226,7 @@ def test_structured_provider_receives_question_sources_and_schema(monkeypatch, b
     monkeypatch.setattr(anthropic,'Anthropic',FakeClient)
     answer, data = knowledge.generate(QUESTION, [], api_key='not-a-real-key')
     assert answer == ANSWER and data['status'] == 'ai_proposed'
+    assert data['source_mode'] == 'none'
     assert seen['output_format'] is knowledge.AnswerMap
     assert QUESTION in seen['messages'][0]['content']
     assert 'not-a-real-key' not in str(data)

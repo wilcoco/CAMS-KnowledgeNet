@@ -30,6 +30,11 @@
 .map-source details{font-size:12px;color:var(--mut);margin-top:5px}
 .map-source details p{white-space:pre-wrap;max-height:240px;overflow:auto}
 .map-source.selected{border-left:3px solid var(--warn);padding-left:7px}
+.reference-picker{display:flex;align-items:center;gap:4px;margin-top:7px;color:var(--link);font-size:12px;cursor:pointer}
+.reference-picker input{accent-color:var(--acc)}
+#selected-sources{margin:6px 0}
+#selected-sources p{margin:4px 0}
+#selected-sources button{max-width:100%;white-space:normal;overflow-wrap:anywhere;text-align:left;margin:2px 0}
 .mobile-sections{display:none}
 #google-search{display:inline-block;margin:8px 0;font-size:12px;color:var(--link)}
 @media(max-width:880px){

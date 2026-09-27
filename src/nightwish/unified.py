@@ -584,6 +584,7 @@ class AskBody(BaseModel):
     #: 요청의 생성 1회에만 쓰이고 서버에 저장되지 않는다.
     api_key: str = ""
     with_knowledge: bool = False
+    source_ids: list[str] = Field(default_factory=list, max_length=5)
 
 
 class PageBody(BaseModel):
@@ -1122,11 +1123,26 @@ def create_app() -> FastAPI:
             related = [_node_view(svc, n.id, body.space)
                        for n in svc.tree.search(body.question, body.space)[:5]
                        if n.is_answer]
+            # Search hits are discovery candidates, not implicit prompt context.
+            # Resolve only the documents explicitly selected in the UI.
+            sources = []
+            for source_id in dict.fromkeys(body.source_ids):
+                source = svc.tree.nodes.get(source_id)
+                if (source is None or not svc.tree._visible(source, body.space)
+                        or source.is_stub or not source.is_answer):
+                    raise HTTPException(404, "선택한 참고 자료를 이 공간에서 볼 수 없습니다.")
+                excerpt = svc.tree.resolved_answer(source.id).strip()[:1800]
+                if not excerpt:
+                    raise HTTPException(400, "본문이 없는 자료는 참고할 수 없습니다.")
+                sources.append({"id": source.id, "title": source.question,
+                                "excerpt": excerpt, "author": source.author,
+                                "model": source.model, "updated_at": source.updated_at,
+                                "selection": "user_selected"})
             # 답 난립 완화 + 교정답 우선(노트 18 P0): 같은 질문(슬러그) 군집 —
             # 원답과 그 스레드의 기여/정정(fork) — 에서 '채택된' 노드 중 **권위
             # 최댓값**을 먼저 보여준다. 표준답이 먼저 채택돼 스테이크가 쌓여
             # 있어도, 더 높은 권위의 교정이 있으면 그게 이긴다. force=True면 생성.
-            if not body.force:
+            if not body.force and not body.source_ids:
                 dup_key = slugify(body.question)
                 if svc.tree._is_group(body.space):
                     dup_key = f"{body.space}::{dup_key}"   # 우리 공간의 기존 답
@@ -1156,11 +1172,7 @@ def create_app() -> FastAPI:
                                                    full=True),
                                 "related": related}
         knowledge = {}
-        if body.with_knowledge:
-            sources = [{"id": r["id"], "title": r["title"],
-                        "excerpt": r["answer"][:1800], "author": r["author"],
-                        "model": r["model"], "updated_at": r["updated_at"]}
-                       for r in related if r["answer"].strip()]
+        if body.with_knowledge or body.source_ids:
             text, knowledge = _ask_with_knowledge(svc, body.question, sources,
                                                    body.author, body.api_key)
         elif body.api_key:                    # BYOK — 본인 키·본인 비용, 쿼터 미차감
@@ -1303,7 +1315,8 @@ def create_app() -> FastAPI:
                             sources.append({"id": cur.id, "title": cur.question,
                                             "excerpt": cur.question + "\n" + cur.answer[:1800],
                                             "author": cur.author, "model": cur.model,
-                                            "updated_at": cur.updated_at})
+                                            "updated_at": cur.updated_at,
+                                            "selection": "conversation"})
                         cur = ctx_tree.nodes.get(cur.parent_id)
                         if cur is None:
                             break
