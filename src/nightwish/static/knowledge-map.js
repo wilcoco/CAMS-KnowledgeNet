@@ -82,7 +82,12 @@ function renderMapSources(n){
   box.replaceChildren();
   const sources = n && n.knowledge && n.knowledge.sources || [];
   if (!n || !n.knowledge || !n.knowledge.version) return;
-  if (!sources.length){box.append(mapEl('p','이 답변은 별도의 내부 자료를 참고하지 않았습니다.','prov'));return;}
+  if (!sources.length){
+    // Publishing can hide private excerpts; absence is not proof of non-use.
+    box.append(mapEl('p',n.knowledge.source_mode==='none'
+      ? '이 답변은 별도의 내부 자료를 참고하지 않았습니다.'
+      : '이 답변에서 공개된 참고 자료가 없습니다.','prov'));return;
+  }
   const mode = n.knowledge.source_mode || (n.parent ? 'conversation' : 'legacy_auto');
   box.append(mapEl('h2',mode==='user_selected' ? '선택해서 참고한 내부 지식' : mode==='conversation' ? '맥락으로 참고한 이전 대화' : '서비스가 자동 검색으로 참고한 자료','sec'),
     mapEl('p',mode==='legacy_auto'
