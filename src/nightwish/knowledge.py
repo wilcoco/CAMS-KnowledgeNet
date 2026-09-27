@@ -140,6 +140,22 @@ class Unavailable(RuntimeError):
     pass
 
 
+def provider_failure(exc: Exception) -> str:
+    """Classify errors without logging prompts, keys or raw provider payloads."""
+    body = getattr(exc, "body", {})
+    error = body.get("error", body) if isinstance(body, dict) else {}
+    message = str(error.get("message", "")).lower() if isinstance(error, dict) else ""
+    if any(s in message for s in ("credit balance", "insufficient credits", "billing limit")):
+        return "billing"
+    if getattr(exc, "status_code", None) in (401, 403):
+        return "authentication"
+    if getattr(exc, "status_code", None) == 429:
+        return "rate_limit"
+    if any(s in message for s in ("model", "thinking", "max_tokens", "output_config", "tools")):
+        return "request_configuration"
+    return "other"
+
+
 def map_revision(data: dict) -> str:
     if data.get("version") != 1:
         return ""
@@ -269,7 +285,11 @@ def research_question(client, question: str) -> dict:
                 break
             messages.append({"role": "assistant", "content": blocks})
     except Exception as exc:
-        logging.getLogger(__name__).warning("Web research failed: %s", type(exc).__name__)
+        logging.getLogger(__name__).warning("Web research failed: %s (%s)",
+                                           type(exc).__name__, provider_failure(exc))
+        if provider_failure(exc) == "billing":
+            raise Unavailable("AI 제공자의 API 잔액이 부족해 답변을 생성할 수 없습니다. "
+                              "운영자가 Anthropic 결제 설정을 확인해야 합니다. 생성 횟수는 차감하지 않았습니다.") from None
     return {"status": "searched" if paragraphs else "no_evidence" if searched else "unavailable",
             "summary": "\n\n".join(paragraphs)[:14000], "sources": list(refs.values())}
 

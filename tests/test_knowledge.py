@@ -420,3 +420,16 @@ def test_private_target_is_not_available_in_public_space(client):
     r=client.post('/api/nodes/'+n['id']+'/contribute',json={
         'author':'x','kind':'comment','body':'의견','map_target':map_target(n)})
     assert r.status_code==404
+
+
+def test_provider_billing_error_is_actionable_and_refunds_quota(client, monkeypatch):
+    monkeypatch.setenv('NIGHTWISH_ASK_QUOTA','1')
+    class ProviderError(Exception):
+        status_code=400
+        body={'error':{'message':'Your credit balance is too low to access the API.'}}
+    def fail(*args,**kwargs): raise ProviderError()
+    monkeypatch.setattr(knowledge,'generate',fail)
+    r=ask(client)
+    assert r.status_code==503 and '잔액' in r.json()['detail']
+    assert unified._quota_left(client.svc,'walker')==1
+    assert knowledge.provider_failure(ProviderError())=='billing'

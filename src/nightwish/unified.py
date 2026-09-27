@@ -298,8 +298,11 @@ def _ask_with_knowledge(svc, question: str, sources: list[dict], author: str,
             raise HTTPException(503, str(exc)) from None
         import logging
         logging.getLogger(__name__).warning(
-            "Knowledge generation failed: %s (status=%s)",
-            type(exc).__name__, getattr(exc, "status_code", "n/a"))
+            "Knowledge generation failed: %s (status=%s, reason=%s)",
+            type(exc).__name__, getattr(exc, "status_code", "n/a"), knowledge.provider_failure(exc))
+        if knowledge.provider_failure(exc) == "billing":
+            raise HTTPException(503, "AI 제공자의 API 잔액이 부족합니다. "
+                                "운영자가 Anthropic 결제 설정을 확인해야 합니다. 생성 횟수는 차감하지 않았습니다.") from None
         raise HTTPException(502, "답변과 개념 지도를 완성하지 못했습니다. "
                             "잠시 후 다시 시도해 주세요. 생성 횟수는 차감하지 않았습니다.") from None
 
