@@ -1,0 +1,48 @@
+[hidden]{display:none!important}
+.map-modes{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
+.map-modes .active{border-color:var(--acc);color:var(--acc)}
+#knowledge-map h3{font-size:16px;line-height:1.6;margin:8px 0}
+.map-kicker{font-size:12px;color:var(--acc)}
+.map-meaning{border-left:2px solid var(--acc);padding-left:10px;font-size:12px;color:var(--mut)}
+.semantic-svg{display:block;width:100%;max-height:430px;overflow:visible}
+.semantic-edge{stroke:var(--mut);stroke-width:1.2;opacity:.4;fill:none}
+.semantic-edge.selected{stroke:var(--warn);stroke-width:2.5;opacity:1}
+.semantic-node{cursor:pointer;outline:none}
+.semantic-node circle{fill:#203657;stroke:var(--acc);stroke-width:1.5}
+.semantic-node.condition circle{fill:#3a3220;stroke:var(--warn)}
+.semantic-node.actor circle{fill:#233d32;stroke:var(--good)}
+.semantic-node.outcome circle{fill:#342941;stroke:var(--fork)}
+.semantic-node text{fill:var(--fg);font-size:10px;pointer-events:none}
+.semantic-node .concept-label{font-size:11px;paint-order:stroke;stroke:var(--panel);stroke-width:3px}
+.semantic-node:focus circle,.semantic-node[aria-pressed="true"] circle{stroke:var(--warn);stroke-width:4}
+.semantic-center circle{fill:var(--panel);stroke:var(--line)}
+.semantic-center text{fill:var(--mut);font-size:11px}
+.map-concepts{display:flex;flex-wrap:wrap;gap:5px}
+.map-concepts button[aria-pressed="true"]{border-color:var(--warn);color:var(--warn)}
+.map-detail{margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:8px;overflow-wrap:anywhere}
+.map-detail blockquote{margin:8px 0;padding-left:10px;border-left:2px solid var(--warn);white-space:pre-wrap}
+.map-detail button{margin:3px}
+.map-relation{width:100%;text-align:left;margin-bottom:5px;white-space:normal;overflow-wrap:anywhere}
+.map-match{background:#715719;color:#fff4c0;border-radius:2px}
+.map-source{padding:10px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.map-source>button{text-align:left;white-space:normal}
+.map-source details{font-size:12px;color:var(--mut);margin-top:5px}
+.map-source details p{white-space:pre-wrap;max-height:240px;overflow:auto}
+.map-source.selected{border-left:3px solid var(--warn);padding-left:7px}
+.mobile-sections{display:none}
+#google-search{display:inline-block;margin:8px 0;font-size:12px;color:var(--link)}
+@media(max-width:880px){
+  .mobile-sections{display:flex;position:sticky;top:0;background:var(--bg);z-index:10;padding:8px;gap:6px;border-bottom:1px solid var(--line)}
+  .mobile-sections button{flex:1}
+  .mobile-sections .active{border-color:var(--acc);color:var(--acc)}
+  .grid{display:block;height:auto;min-height:70vh}
+  .grid>.split{display:none}
+  .grid>.center{min-height:70vh;height:auto;overflow:auto}
+  .grid>aside{height:auto;max-height:none;min-width:0}
+  body[data-section="search"] .grid>.center,body[data-section="search"] .grid>.right{display:none}
+  body[data-section="answer"] .grid>aside{display:none}
+  body[data-section="graph"] .grid>aside:not(.right),body[data-section="graph"] .grid>.center{display:none}
+  .pane{min-width:min(100%,500px)!important;max-width:100%}
+  .onboard .row{flex-wrap:wrap}.onboard input{width:100%!important}
+  #knowledge-map{max-width:520px;margin:auto}
+}

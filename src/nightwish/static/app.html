@@ -182,6 +182,7 @@
   .err { color:var(--stub); font-size:12px; }
   code { background:#0c0e13; padding:1px 5px; border-radius:4px; }
 </style>
+<link rel="stylesheet" href="/static/knowledge-map.css?v=1" />
 </head>
 <body>
 <div id="busy"><span class="spinner"></span> <span id="busy-msg">AI가 답변을 생성하는 중…</span></div>
@@ -215,6 +216,11 @@
   <button class="sec" id="btn-reset" title="모든 노드·평가 삭제 (되돌릴 수 없음)">전체 삭제</button>
 </header>
 
+<nav class="mobile-sections" aria-label="화면 영역">
+  <button class="sec" data-section-tab="search">검색·자료</button>
+  <button class="sec" data-section-tab="answer">질문·답변</button>
+  <button class="sec" data-section-tab="graph">개념·그래프</button>
+</nav>
 <div class="grid">
   <!-- LEFT: Windsurf-style tabs — 검색(진입) / 위치(트리 탐색기) -->
   <aside>
@@ -231,6 +237,8 @@
         <label class="prov" style="margin-left:auto;cursor:pointer" title="사람이 가려낸(채택) 답을 위로"><input type="checkbox" id="sort-adopted" style="vertical-align:middle"> 채택 우선</label>
       </div>
       <div id="results"></div>
+      <a id="google-search" hidden target="_blank" rel="noopener noreferrer">Google에서 직접 검색 ↗</a>
+      <div id="map-sources"></div>
 
       <h2 class="sec">열린 질의 <button class="link" id="new-query">+ 새 질의</button></h2>
       <div id="query-form" style="display:none">
@@ -262,6 +270,12 @@
       <button class="tab" data-rtab="board" title="발자국 쌓인 길·안목·단골 랭킹">🏆 점수판</button>
     </div>
     <div class="tabpane" id="rtab-map">
+      <div class="map-modes" aria-label="지도 보기 방식">
+        <button class="sec" data-map-mode="semantic">개념·관계</button>
+        <button class="sec" data-map-mode="documents">답의 연결</button>
+      </div>
+      <div id="knowledge-map" hidden></div>
+      <div id="document-map">
       <div class="row" style="margin-bottom:6px;flex-wrap:wrap;gap:4px">
         <span class="prov">깊이</span>
         <button class="sec ego-d" data-d="1">1</button>
@@ -275,6 +289,7 @@
       </div>
       <div id="ego" class="prov">노드를 열면 그 연결이 여기 그려집니다</div>
       <div class="prov" style="margin-top:6px">배치=의미: 위 원답·상위·전제 / 아래 기여·하위 / 좌 정정·대립 / 우 관련·역링크 · 드래그로 정리, 휠로 줌, 빈 곳 끌면 이동, 클릭=열기</div>
+      </div>
     </div>
     <div class="tabpane" id="rtab-me" style="display:none">
     <h2 class="sec" title="내가 만들거나 가려낸 지식이 전체에서 차지하는 몫">내 프로필 — 지식 영역 점유율</h2>
@@ -296,6 +311,7 @@
   </aside>
 </div>
 
+<script src="/static/knowledge-map.js?v=1"></script>
 <script>
 const $ = s => document.querySelector(s);
 const api = async (m, url, body) => {
@@ -336,7 +352,7 @@ function toast(msg, ms=3500){
   const el = $('#toast'); el.textContent = msg; el.classList.add('on');
   clearTimeout(toastT); toastT = setTimeout(()=> el.classList.remove('on'), ms);
 }
-const esc = s => (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const esc = s => String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 // render [[wikilinks]] + bare http(s) URLs as clickable
 function renderText(t){
@@ -397,6 +413,8 @@ function nodeItem(n){
 
 async function doSearch(){
   const q = $('#search').value.trim();
+  $('#google-search').hidden = !q;
+  $('#google-search').href = 'https://www.google.com/search?q='+encodeURIComponent(q);
   let res = await api('GET', `/api/search?q=${encodeURIComponent(q)}&space=${space()}`);
   if ($('#sort-adopted') && $('#sort-adopted').checked)
     res = [...res].sort((a,b)=> (b.adopted?1:0)-(a.adopted?1:0) || b.authority-a.authority);
@@ -410,7 +428,7 @@ async function doSearch(){
     const lead = document.createElement('div');
     lead.className = 'prov';
     const nAdopted = res.filter(n=>n.adopted).length;
-    lead.innerHTML = `♻️ 기존 길 <b>${res.length}</b>개${nAdopted?` (사람이 가려낸 답 ${nAdopted}개)`:''} — 재사용은 공짜이고, 이미 검증된 답입니다.`;
+    lead.innerHTML = `♻️ 기존 길 <b>${res.length}</b>개${nAdopted?` (사람의 발자국이 남은 답 ${nAdopted}개)`:''} — 재사용은 공짜입니다. 근거와 적용 조건을 함께 확인하세요.`;
     box.appendChild(lead);
   }
   res.forEach(n => box.appendChild(nodeItem(n)));
@@ -470,9 +488,9 @@ async function doAsk(force){
   const q = $('#search').value.trim();
   if (!q) return;
   try {
-    const r = await withBusy(force ? 'AI가 새 답변을 생성하는 중…' : 'AI가 답변을 생성하는 중…',
+    const r = await withBusy('질문의 의미를 살피고 답변과 개념 지도를 함께 만드는 중…',
       ()=> api('POST','/api/ask',{question:q, author:me(), space:space(), force:!!force,
-                                  api_key: localStorage.getItem('nw_byok') || ''}),
+                                  api_key: localStorage.getItem('nw_byok') || '', with_knowledge:true}),
       $('#btn-ask'));
     await refreshStat();
     renderNode(r.node);                 // 새 AI 답 또는 기존 채택본
@@ -542,10 +560,12 @@ const fetchNode = id => api('GET',`/api/nodes/${encodeURIComponent(id)}?space=${
 async function openNode(id){            // start a FRESH trail (left list / search / scores)
   panes().innerHTML = ''; trail = [];
   await pushPane(id);
+  setMobileSection('answer');
 }
 function renderNode(n){                 // fresh trail from an already-fetched node object
   panes().innerHTML = ''; trail = [n.id];
   focusPane(addPaneEl(n));
+  setMobileSection('answer');
 }
 async function pushPane(id, afterEl){   // open `id` as a new pane right of `afterEl`
   if (afterEl){
@@ -571,6 +591,7 @@ function focusPane(pane){
   if (pane){
     pane.classList.add('active');
     if (pane.dataset.nodeId) syncTree(pane.dataset.nodeId);   // 트리에 위치 반영
+    if (pane._node && EGO.data !== pane._node) renderEgo(pane._node);
   }
 }
 // 🕸 연결 지도 — 옵시디안급 동적 에고 그래프 (외부 라이브러리 없음).
@@ -583,6 +604,8 @@ const egoDepth = ()=> Math.min(6, Math.max(1, +(localStorage.getItem('nw_ego_dep
 const egoSpace = ()=> Math.min(240, Math.max(70, +(localStorage.getItem('nw_ego_space')||110)));
 async function renderEgo(n){
   EGO.data = n;
+  cancelAnimationFrame(EGO.raf); EGO.running = false;
+  if (renderKnowledge(n)) return;
   const box = $('#ego'); if (!box) return;
   const paneEl = $('#rtab-map');
   if (paneEl && paneEl.style.display === 'none') return;
@@ -806,12 +829,12 @@ function showOnboard(){
        <b>많이 *그리고 두루*</b> 발자국이 쌓인 답일수록 위로 올라가고, 그 길을 <b>먼저 알아본 사람의 안목</b>도 함께 쌓입니다.</p>
     <div class="row" style="justify-content:center">
       <input id="onboard-q" placeholder="지금 궁금한 것을 그대로 적어보세요" style="width:62%"/>
-      <button id="onboard-go">🤖 첫 질문하기</button>
+      <button id="onboard-go">먼저 찾아보기</button>
     </div>
     <p class="prov">① 먼저 검색 — 이미 닦인 길이 있으면 공짜로 읽기 · ② 없으면 AI에게 — 내 첫 길 내기 · ③ 👥 동료 초대 — 함께 가려내기</p>
   </div>`;
   const go = ()=>{ const q = $('#onboard-q').value.trim(); if (!q) return;
-    $('#search').value = q; doAsk(); };
+    $('#search').value = q; doSearch(); setMobileSection('search'); };
   $('#onboard-go').onclick = go;
   $('#onboard-q').addEventListener('keydown', e=>{
     if (e.key==='Enter'){ e.preventDefault(); go(); } });
@@ -927,6 +950,7 @@ function threadHTML(list){
         · 권위 ${c.authority}</div>
       ${title}
       <div class="body">${renderText(c.body)}</div>
+      ${c.has_knowledge ? `<button class="sec open-knowledge" data-id="${esc(c.id)}">이 답의 개념 지도 보기</button>` : ''}
       ${evalCtrl}
       ${actbar(c.id)}
       <div class="reply" data-rid="${esc(c.id)}"></div>
@@ -1164,6 +1188,9 @@ function fillPane(n, c){
   if (c.parentElement && c === c.parentElement.lastElementChild) renderEgo(n);
   c.querySelectorAll('button[data-act]').forEach(b =>
     b.onclick = ()=> showReply(b.dataset.id, b.dataset.act, c));
+  c.querySelectorAll('.open-knowledge').forEach(b=>b.onclick=async()=>{
+    await pushPane(b.dataset.id,c); setMobileSection('graph');
+  });
   c.querySelectorAll('.eval-btn').forEach(b =>
     b.onclick = async ()=>{
       const row = b.closest('.eval-row');
@@ -1249,7 +1276,7 @@ async function submitContrib(id, kind, body, btn, pane){
   try{
     await withBusy(msg,
       ()=> api('POST',`/api/nodes/${encodeURIComponent(id)}/contribute`,
-        {kind, author:me(), body, space:space()}), btn);
+        {kind, author:me(), body, space:space(), with_knowledge:kind==='followup'}), btn);
     await refreshStat(); loadScores();
     await refreshPane(pane);   // re-render this pane's thread in place
     // 새 기여는 패널 하단 스레드에 붙는다 — 다시 그린 뒤 스크롤이 위에 머물면
@@ -1599,6 +1626,8 @@ $('#btn-invite').onclick = doInvite;
   }
   showOnboard();
   await refreshStat(); reloadAll(); updateLayerHint();
+  const nodeId = new URLSearchParams(location.search).get('node');
+  if (nodeId) { try { await openNode(nodeId); } catch(e) { toast('이 답을 열 수 없습니다.'); } }
 })();
 </script>
 </body>

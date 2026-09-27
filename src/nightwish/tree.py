@@ -159,6 +159,8 @@ class Node:
     #: 적용 조건 패싯(노트 18 P2) — "이 답은 {Pro/Max}에서" 같은 맥락 라벨.
     #: AI가 제안하고 사람이 탭으로 확정/제거 — 강제 입력 폼 없음(노동화 금지).
     conditions: list[str] = field(default_factory=list)
+    #: Joint question/answer semantic map. AI proposals do not change scoring.
+    knowledge: dict = field(default_factory=dict)
 
     @property
     def is_unfold(self) -> bool:
@@ -600,6 +602,7 @@ class OntologyTree:
         if node.action is not Action.QUERY:
             raise OntologyError(f"node {node_id!r} is not an open query")
         node.answer = answer
+        node.knowledge = {}  # evidence belongs to the previous text version
         node.author = node.author or author
         node.last_editor = author
         node.action = Action.ROOT
@@ -1022,6 +1025,7 @@ class OntologyTree:
             "link_rels": {k: {t: list(u) for t, u in r.items()}
                           for k, r in n.link_rels.items()},
             "conditions": list(n.conditions),
+            "knowledge": n.knowledge,
         }
 
     @staticmethod
@@ -1040,6 +1044,7 @@ class OntologyTree:
             link_rels={k: {t: list(u) for t, u in (r or {}).items()}
                        for k, r in d.get("link_rels", {}).items()},
             conditions=list(d.get("conditions", [])),
+            knowledge=dict(d.get("knowledge") or {}),
         )
 
     @classmethod

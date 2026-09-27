@@ -273,6 +273,35 @@ def _charge_gen_quota(svc: "UnifiedService", author: str) -> None:
     svc._gen_counts[key] = used + 1
 
 
+def _ask_with_knowledge(svc, question: str, sources: list[dict], author: str,
+                        api_key: str = "") -> tuple[str, dict]:
+    from datetime import date
+    from nightwish import knowledge
+
+    if not question.strip() or len(question) > 6000:
+        raise HTTPException(400, "질문은 1~6,000자로 입력해 주세요.")
+    key = (author, date.today().isoformat())
+    charged = not api_key and _gen_quota() is not None
+    if not api_key:
+        with svc._lock:
+            _charge_gen_quota(svc, author)
+    try:
+        # No service/DB lock is held while waiting for the provider.
+        return knowledge.generate(question, sources, api_key=api_key)
+    except Exception as exc:
+        if charged:
+            with svc._lock:
+                svc._gen_counts[key] = max(0, svc._gen_counts.get(key, 0) - 1)
+        if isinstance(exc, knowledge.Unavailable):
+            raise HTTPException(503, str(exc)) from None
+        import logging
+        logging.getLogger(__name__).warning(
+            "Knowledge generation failed: %s (status=%s)",
+            type(exc).__name__, getattr(exc, "status_code", "n/a"))
+        raise HTTPException(502, "답변과 개념 지도를 완성하지 못했습니다. "
+                            "잠시 후 다시 시도해 주세요. 생성 횟수는 차감하지 않았습니다.") from None
+
+
 # --- 웹 링크 읽고 요약 (보강/정정에 URL이 들어오면) -------------------------- #
 _URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
 
@@ -547,13 +576,14 @@ def reset_service(svc: Optional[UnifiedService]) -> None:
 # request bodies                                                              #
 # --------------------------------------------------------------------------- #
 class AskBody(BaseModel):
-    question: str = Field(min_length=1)
+    question: str = Field(min_length=1, max_length=6000)
     author: str = Field(min_length=1)
     space: str = "public"
     force: bool = False  # True면 동일 채택본이 있어도 새 답을 강제 생성
     #: BYOK(노트 19 ③): 쿼터를 넘긴 사용자가 자기 키로 계속 생성. 이 키는 이
     #: 요청의 생성 1회에만 쓰이고 서버에 저장되지 않는다.
     api_key: str = ""
+    with_knowledge: bool = False
 
 
 class PageBody(BaseModel):
@@ -570,6 +600,7 @@ class ContribBody(BaseModel):
     space: str = "public"
     #: contextual unfold (노트 07): the parent text span being elaborated inline
     anchor: str = ""
+    with_knowledge: bool = False
 
 
 class RelateBody(BaseModel):
@@ -679,7 +710,7 @@ def _node_view(svc: UnifiedService, node_id: str, space: str, *, full: bool = Fa
     t = svc.tree
     n = t.nodes[node_id]
     view = {
-        "id": n.id, "slug": n.slug, "title": n.question,
+        "id": n.id, "slug": n.slug, "title": n.question or n.knowledge.get("question_text", ""),
         "answer": t.resolved_answer(n.id), "own_answer": n.answer,
         "author": n.author, "last_editor": n.last_editor,
         "action": n.action.value, "status": n.status.value,
@@ -706,6 +737,7 @@ def _node_view(svc: UnifiedService, node_id: str, space: str, *, full: bool = Fa
         for cid in n.children)
     view["conditions"] = list(n.conditions)
     if full:
+        view["knowledge"] = n.knowledge
         # 연결 지도(에고 그래프)용 — 이 답이 매달린 원답(부모)
         p = t.nodes.get(n.parent_id) if n.parent_id else None
         view["parent"] = ({"id": p.id, "title": p.question or "(답)"}
@@ -748,6 +780,7 @@ def _thread(svc: UnifiedService, node_id: str, space: str) -> list[dict]:
         out.append({
             "id": child.id, "kind": child.action.value, "author": child.author,
             "title": child.question, "body": child.answer,
+            "has_knowledge": bool(child.knowledge),
             "frozen": child.frozen, "model": child.model, "space": child.space,
             "authority": round(t.authority_in(child.id, space), 4),
             "staked": round(sum(svc.econ.staked_on(child.id).values()), 4),
@@ -1122,7 +1155,15 @@ def create_app() -> FastAPI:
                                 "node": _node_view(svc, best.id, body.space,
                                                    full=True),
                                 "related": related}
-        if body.api_key:                      # BYOK — 본인 키·본인 비용, 쿼터 미차감
+        knowledge = {}
+        if body.with_knowledge:
+            sources = [{"id": r["id"], "title": r["title"],
+                        "excerpt": r["answer"][:1800], "author": r["author"],
+                        "model": r["model"], "updated_at": r["updated_at"]}
+                       for r in related if r["answer"].strip()]
+            text, knowledge = _ask_with_knowledge(svc, body.question, sources,
+                                                   body.author, body.api_key)
+        elif body.api_key:                    # BYOK — 본인 키·본인 비용, 쿼터 미차감
             text = _ask_ai_byok(body.question, "", body.api_key)
         else:
             _charge_gen_quota(svc, body.author)   # 생성만 게이트 — 재사용은 무료
@@ -1135,7 +1176,8 @@ def create_app() -> FastAPI:
             # 공용 공개는 명시적 publish로만. 공용에서 물으면 종전대로 커먼즈.
             svc.tree.add_root(nid, body.question, text, body.author,
                               space=body.space)
-            svc.tree.mark_answered(nid, _ai_model)
+            svc.tree.mark_answered(nid, knowledge.get("model", _ai_model))
+            svc.tree.nodes[nid].knowledge = knowledge
             return {"stage": "ai",
                     "node": _node_view(svc, nid, body.space, full=True),
                     "related": related,
@@ -1231,6 +1273,7 @@ def create_app() -> FastAPI:
         # A follow-up / unfold AI answer is a slow network call: do it OUTSIDE the
         # lock, but first anchor it to the parent chain so it answers *in context*.
         ai_text = None
+        knowledge = {}
         if kind in ("followup", "unfold"):
             from nightwish import db, pgstore
 
@@ -1243,6 +1286,8 @@ def create_app() -> FastAPI:
                     ctx_tree = svc.tree
             if ctx_tree is None or node_id not in ctx_tree.nodes:
                 raise HTTPException(404, f"node {node_id!r} not found")
+            if not ctx_tree._visible(ctx_tree.nodes[node_id], body.space):
+                raise HTTPException(404, f"node {node_id!r} not found")
             if kind == "unfold":
                 span = body.anchor.strip()
                 q = body.body.strip() or f'"{span}" — 이 맥락에서 자세히 설명'
@@ -1250,8 +1295,22 @@ def create_app() -> FastAPI:
                 q = body.body
             ai_text = None
             if kind in ("followup", "unfold"):     # 생성을 쓰는 kind만 — 쿼터 게이트
-                _charge_gen_quota(svc, body.author)
-                ai_text = _ask_ai(q, _anchor_prompt(ctx_tree, node_id))
+                if body.with_knowledge:
+                    sources = []
+                    cur = ctx_tree.nodes[node_id]
+                    for _ in range(5):
+                        if ctx_tree._visible(cur, body.space):
+                            sources.append({"id": cur.id, "title": cur.question,
+                                            "excerpt": cur.question + "\n" + cur.answer[:1800],
+                                            "author": cur.author, "model": cur.model,
+                                            "updated_at": cur.updated_at})
+                        cur = ctx_tree.nodes.get(cur.parent_id)
+                        if cur is None:
+                            break
+                    ai_text, knowledge = _ask_with_knowledge(svc, q, sources, body.author)
+                else:
+                    _charge_gen_quota(svc, body.author)
+                    ai_text = _ask_ai(q, _anchor_prompt(ctx_tree, node_id))
         # 보강/정정에 웹 링크가 들어오면 그 페이지를 *읽고* 요약해 본문에 덧붙인다.
         # 단일 원천·국소(노트 12) — 전역 재통합 아님. 네트워크/LLM 없으면 원문 그대로.
         if kind in ("comment", "fork"):
@@ -1289,7 +1348,8 @@ def create_app() -> FastAPI:
                     aid = svc._child_id(qid)
                     svc.tree.contribute(aid, qid, "AI", ai_text,
                                         stake=0.0, space=body.space)
-                    svc.tree.mark_answered(aid, _ai_model)
+                    svc.tree.mark_answered(aid, knowledge.get("model", _ai_model))
+                    svc.tree.nodes[aid].knowledge = knowledge
                 elif kind == "unfold":
                     # 맥락 내 펼침: 스팬에 앵커된 단일 AI 답 → 인라인 재귀(노트 07)
                     span = body.anchor.strip()
@@ -1299,7 +1359,8 @@ def create_app() -> FastAPI:
                                         question=(body.body.strip() or span),
                                         value_add=True, space=body.space,
                                         anchor=span)
-                    svc.tree.mark_answered(uid, _ai_model)
+                    svc.tree.mark_answered(uid, knowledge.get("model", _ai_model))
+                    svc.tree.nodes[uid].knowledge = knowledge
                 else:  # comment / 보강
                     if not body.body.strip():
                         raise HTTPException(400, "의견 내용이 필요합니다")

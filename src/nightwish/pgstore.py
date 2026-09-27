@@ -58,6 +58,7 @@ def snapshot_to_rows(snap: dict) -> dict[str, list[dict]]:
             "ord": ordn, "anchor": n.get("anchor", ""),
             "link_rels": json.dumps(n.get("link_rels") or {}, ensure_ascii=False),
             "conditions": json.dumps(n.get("conditions") or [], ensure_ascii=False),
+            "knowledge": json.dumps(n.get("knowledge") or {}, ensure_ascii=False),
         })
         for i, target in enumerate(n.get("links", [])):
             link_rows.append({"node_id": n["id"], "ord": i, "target": target})
@@ -134,6 +135,7 @@ def rows_to_snapshot(tables: dict[str, list[dict]]) -> dict:
             "anchor": r.get("anchor", ""),
             "link_rels": json.loads(r.get("link_rels") or "{}"),
             "conditions": json.loads(r.get("conditions") or "[]"),
+            "knowledge": json.loads(r.get("knowledge") or "{}"),
         })
 
     linkers: dict[str, list[tuple[int, str]]] = {}
@@ -187,6 +189,7 @@ _DDL = [
     "ALTER TABLE node ADD COLUMN IF NOT EXISTS anchor text",
     "ALTER TABLE node ADD COLUMN IF NOT EXISTS link_rels text",
     "ALTER TABLE node ADD COLUMN IF NOT EXISTS conditions text",
+    "ALTER TABLE node ADD COLUMN IF NOT EXISTS knowledge text",
     "CREATE INDEX IF NOT EXISTS node_author_idx ON node(author)",
     "CREATE INDEX IF NOT EXISTS node_space_idx ON node(space)",
     "CREATE INDEX IF NOT EXISTS node_parent_idx ON node(parent_id)",
@@ -207,7 +210,7 @@ _COLS = {
     "node": ["id", "slug", "question", "answer", "author", "last_editor", "action",
              "status", "space", "parent_id", "stake", "value_add", "frozen", "model",
              "answered_at", "created_at", "updated_at", "ord", "anchor", "link_rels",
-             "conditions"],
+             "conditions", "knowledge"],
     "node_link": ["node_id", "ord", "target"],
     "linker": ["node_id", "ord", "evaluator"],
     "node_authority": ["node_id", "value"],
