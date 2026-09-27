@@ -25,7 +25,7 @@ function renderReferenceSelection(){
   const box = document.getElementById('selected-sources'); if(!box) return;
   box.replaceChildren(mapEl('p',selectedReferences.size
     ? `다음 답변에 참고할 내부 지식 ${selectedReferences.size}건`
-    : '선택한 자료 없음 · 새 답변에는 질문만 전달합니다.','prov'));
+    : '선택한 내부 자료 없음 · 기존 문서를 자동으로 넣지 않습니다.','prov'));
   selectedReferences.forEach((title,id)=>box.append(mapButton(title+' ×',()=>{
     selectedReferences.delete(id);renderReferenceSelection();
   })));
@@ -44,6 +44,14 @@ function referencePicker(n){
     renderReferenceSelection();
   };
   label.append(input,document.createTextNode(' 답변에 참고'));return label;
+}
+function updateResearchScope(){
+  const input=document.getElementById('research-web'), publicSpace=space()==='public';
+  input.disabled=!publicSpace;
+  if(!publicSpace) input.checked=false;
+  document.getElementById('research-hint').textContent=publicSpace
+    ? '질문을 웹 검색에 사용합니다. 선택한 내부 자료와 아래 배경은 검색어로 보내지 않습니다.'
+    : '그룹 질문은 외부 웹 검색을 사용하지 않습니다. 선택한 지식과 대화 맥락으로 답변합니다.';
 }
 function setMobileSection(name){
   document.body.dataset.section = name;
@@ -64,7 +72,8 @@ function highlightMapQuote(n, quote, origin){
   root.normalize();
   const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const texts = []; while(walk.nextNode()) texts.push(walk.currentNode);
-  const needle=quote.replace(/\[\[([^\]]+)\]\]/g,'$1');
+  const needle=quote.replace(/\[\[([^\]]+)\]\]/g,'$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/[*`]/g,'');
   const start=texts.map(t=>t.textContent).join('').indexOf(needle);
   if(start<0) return;
   let offset=0;
@@ -82,6 +91,25 @@ function renderMapSources(n){
   box.replaceChildren();
   const sources = n && n.knowledge && n.knowledge.sources || [];
   if (!n || !n.knowledge || !n.knowledge.version) return;
+  const k=n.knowledge;
+  if(k.background){
+    const details=mapEl('details',undefined,'map-source');
+    details.append(mapEl('summary','이 답변에 전달한 배경·목표'),mapEl('p',k.background));box.append(details);
+  }
+  if(k.research_status){
+    box.append(mapEl('h2','웹 원문 확인','sec'));
+    const status={searched:'웹 검색에서 찾은 출처입니다. 원문의 설명과 AI의 적용 제안을 구별해 읽어 주세요.',
+      off:'이 답변에서는 웹 검색을 사용하지 않았습니다.',
+      no_evidence:'웹 검색에서 인용 가능한 근거를 확보하지 못했습니다. 답변을 웹으로 검증한 것은 아닙니다.',
+      unavailable:'웹 검색을 완료하지 못했습니다. 아래 답변은 웹 검증 없이 작성되었습니다.'};
+    box.append(mapEl('p',status[k.research_status]||'웹 확인 상태를 알 수 없습니다.','prov'));
+    (k.web_sources||[]).forEach(s=>{
+      let url;try{url=new URL(s.url);}catch{return;}
+      if(!['https:','http:'].includes(url.protocol))return;
+      const item=mapEl('div',undefined,'map-source web-source'),a=mapEl('a',`[${s.id}] ${s.title}`);
+      a.href=url.href;a.target='_blank';a.rel='noopener noreferrer';item.append(a);box.append(item);
+    });
+  }
   if (!sources.length){
     // Publishing can hide private excerpts; absence is not proof of non-use.
     box.append(mapEl('p',n.knowledge.source_mode==='none'
@@ -201,6 +229,7 @@ function renderKnowledge(n){
 document.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('search').addEventListener('input',syncReferenceSelection);
   renderReferenceSelection();
+  updateResearchScope();
   document.querySelectorAll('[data-map-mode]').forEach(b=>b.onclick=()=>{knowledgeMode=b.dataset.mapMode;renderEgo(EGO.data);});
   document.querySelectorAll('[data-section-tab]').forEach(b=>b.onclick=()=>setMobileSection(b.dataset.sectionTab));
   setMobileSection('search');

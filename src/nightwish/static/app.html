@@ -182,7 +182,7 @@
   .err { color:var(--stub); font-size:12px; }
   code { background:#0c0e13; padding:1px 5px; border-radius:4px; }
 </style>
-<link rel="stylesheet" href="/static/knowledge-map.css?v=3" />
+<link rel="stylesheet" href="/static/knowledge-map.css?v=4" />
 </head>
 <body>
 <div id="busy"><span class="spinner"></span> <span id="busy-msg">AI가 답변을 생성하는 중…</span></div>
@@ -232,6 +232,12 @@
     <div class="tabpane" id="tab-search">
       <textarea id="search" rows="3" placeholder="궁금한 것을 적고 Enter — 기존 답(공짜)부터 찾고, 없으면 종합, 그래도 없으면 생성"></textarea>
       <div id="selected-sources" aria-live="polite"></div>
+      <label class="reference-picker"><input type="checkbox" id="research-web" checked> 웹 원문도 찾아서 답변</label>
+      <p id="research-hint" class="prov">질문을 웹 검색에 사용합니다. 선택한 내부 자료와 아래 배경은 검색어로 보내지 않습니다.</p>
+      <details class="answer-context"><summary>배경·목표 추가 (선택)</summary>
+        <textarea id="answer-background" rows="4" maxlength="4000" placeholder="예: 제조업 품질팀에서 쓰려 합니다. 표준과 현장 경험을 연결하고, 기준 변경은 담당자가 승인해야 합니다."></textarea>
+        <p class="prov">다른 ChatGPT 대화는 자동으로 전달되지 않습니다. 여기 적은 배경은 이 답변과 후속 대화에 함께 남습니다.</p>
+      </details>
       <div class="row">
         <button id="btn-search" title="1계단 — 이미 있는 답 재사용: 가장 싸고, 사람이 가려낸 답">🔎 기존 답 찾기</button>
         <button id="btn-ask" class="sec" title="3계단(마지막) — 기존·종합으로 안 되면 프런티어 AI가 새 초안 생성">✨ 새 답 생성</button>
@@ -312,7 +318,7 @@
   </aside>
 </div>
 
-<script src="/static/knowledge-map.js?v=4"></script>
+<script src="/static/knowledge-map.js?v=5"></script>
 <script>
 const $ = s => document.querySelector(s);
 const api = async (m, url, body) => {
@@ -493,10 +499,12 @@ async function doAsk(force){
   const q = $('#search').value.trim();
   if (!q) return;
   try {
-    const r = await withBusy('질문의 의미를 살피고 답변과 개념 지도를 함께 만드는 중…',
+    const r = await withBusy('자료 확인 → 답변 작성 → 개념 지도 구성 중… 최대 몇 분 걸릴 수 있습니다.',
       ()=> api('POST','/api/ask',{question:q, author:me(), space:space(), force:!!force,
                                   api_key: localStorage.getItem('nw_byok') || '', with_knowledge:true,
-                                  source_ids:[...selectedReferences.keys()]}),
+                                  source_ids:[...selectedReferences.keys()],
+                                  background:$('#answer-background').value.trim(),
+                                  web_search:space()==='public' && $('#research-web').checked}),
       $('#btn-ask'));
     await refreshStat();
     renderNode(r.node);                 // 새 AI 답 또는 기존 채택본
@@ -1085,7 +1093,7 @@ function fillPane(n, c){
     ${coauthorsHTML(n.coauthors)}
     ${n.is_query ? '' : (n.is_stub
       ? `<div class="answer prov">아직 비어 있는 개념입니다 — 위키링크로 자리만 잡혔어요. 아래 버튼으로 AI 정리를 생성하세요.</div>`
-      : `<div class="answer">${renderText(n.answer)}</div>`)}
+      : `<div class="answer${n.answer_html ? ' markdown-answer' : ''}">${n.answer_html || renderText(n.answer)}</div>`)}
     ${condChips}${queryAnswer}${stubFill}${draftHint}${recheckHint}
     ${n.outlinks && n.outlinks.length ? `<div class="prov">연결: ${
       n.outlinks.map(o=>`<span class="olw"><a class="ol" data-oid="${esc(o.id)}">${esc(o.title)}</a><a
@@ -1596,6 +1604,8 @@ $('#add-space').onclick = ()=>{
 $('#space').onchange = onSpaceChange;
 
 function onSpaceChange(){           // 레이어 바뀌면 좌·우뿐 아니라 *열린 패널*도 갱신
+  $('#answer-background').value='';
+  updateResearchScope();
   reloadAll();
   refreshAllPanes();
   updateLayerHint();

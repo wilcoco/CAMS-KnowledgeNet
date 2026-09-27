@@ -274,7 +274,8 @@ def _charge_gen_quota(svc: "UnifiedService", author: str) -> None:
 
 
 def _ask_with_knowledge(svc, question: str, sources: list[dict], author: str,
-                        api_key: str = "") -> tuple[str, dict]:
+                        api_key: str = "", *, background: str = "",
+                        web_search: bool = False) -> tuple[str, dict]:
     from datetime import date
     from nightwish import knowledge
 
@@ -287,7 +288,8 @@ def _ask_with_knowledge(svc, question: str, sources: list[dict], author: str,
             _charge_gen_quota(svc, author)
     try:
         # No service/DB lock is held while waiting for the provider.
-        return knowledge.generate(question, sources, api_key=api_key)
+        return knowledge.generate(question, sources, api_key=api_key,
+                                  background=background, web_search=web_search)
     except Exception as exc:
         if charged:
             with svc._lock:
@@ -585,6 +587,8 @@ class AskBody(BaseModel):
     api_key: str = ""
     with_knowledge: bool = False
     source_ids: list[str] = Field(default_factory=list, max_length=5)
+    background: str = Field(default="", max_length=4000)
+    web_search: bool = False  # the UI discloses and opts in for public questions
 
 
 class PageBody(BaseModel):
@@ -739,6 +743,8 @@ def _node_view(svc: UnifiedService, node_id: str, space: str, *, full: bool = Fa
     view["conditions"] = list(n.conditions)
     if full:
         view["knowledge"] = n.knowledge
+        from nightwish.rendering import render_answer
+        view["answer_html"] = render_answer(view["answer"])
         # 연결 지도(에고 그래프)용 — 이 답이 매달린 원답(부모)
         p = t.nodes.get(n.parent_id) if n.parent_id else None
         view["parent"] = ({"id": p.id, "title": p.question or "(답)"}
@@ -1131,7 +1137,7 @@ def create_app() -> FastAPI:
                 if (source is None or not svc.tree._visible(source, body.space)
                         or source.is_stub or not source.is_answer):
                     raise HTTPException(404, "선택한 참고 자료를 이 공간에서 볼 수 없습니다.")
-                excerpt = svc.tree.resolved_answer(source.id).strip()[:1800]
+                excerpt = svc.tree.resolved_answer(source.id).strip()[:8000]
                 if not excerpt:
                     raise HTTPException(400, "본문이 없는 자료는 참고할 수 없습니다.")
                 sources.append({"id": source.id, "title": source.question,
@@ -1142,7 +1148,7 @@ def create_app() -> FastAPI:
             # 원답과 그 스레드의 기여/정정(fork) — 에서 '채택된' 노드 중 **권위
             # 최댓값**을 먼저 보여준다. 표준답이 먼저 채택돼 스테이크가 쌓여
             # 있어도, 더 높은 권위의 교정이 있으면 그게 이긴다. force=True면 생성.
-            if not body.force and not body.source_ids:
+            if not body.force and not body.source_ids and not body.background and not body.web_search:
                 dup_key = slugify(body.question)
                 if svc.tree._is_group(body.space):
                     dup_key = f"{body.space}::{dup_key}"   # 우리 공간의 기존 답
@@ -1172,9 +1178,10 @@ def create_app() -> FastAPI:
                                                    full=True),
                                 "related": related}
         knowledge = {}
-        if body.with_knowledge or body.source_ids:
+        if body.with_knowledge or body.source_ids or body.background or body.web_search:
             text, knowledge = _ask_with_knowledge(svc, body.question, sources,
-                                                   body.author, body.api_key)
+                body.author, body.api_key, background=body.background.strip(),
+                web_search=body.web_search and body.space == "public")
         elif body.api_key:                    # BYOK — 본인 키·본인 비용, 쿼터 미차감
             text = _ask_ai_byok(body.question, "", body.api_key)
         else:
@@ -1309,18 +1316,22 @@ def create_app() -> FastAPI:
             if kind in ("followup", "unfold"):     # 생성을 쓰는 kind만 — 쿼터 게이트
                 if body.with_knowledge:
                     sources = []
+                    background = ""
                     cur = ctx_tree.nodes[node_id]
                     for _ in range(5):
                         if ctx_tree._visible(cur, body.space):
+                            if not background:
+                                background = cur.knowledge.get("background", "")
                             sources.append({"id": cur.id, "title": cur.question,
-                                            "excerpt": cur.question + "\n" + cur.answer[:1800],
+                                            "excerpt": cur.question + "\n" + cur.answer[:8000],
                                             "author": cur.author, "model": cur.model,
                                             "updated_at": cur.updated_at,
                                             "selection": "conversation"})
                         cur = ctx_tree.nodes.get(cur.parent_id)
                         if cur is None:
                             break
-                    ai_text, knowledge = _ask_with_knowledge(svc, q, sources, body.author)
+                    ai_text, knowledge = _ask_with_knowledge(svc, q, sources, body.author,
+                                                             background=background)
                 else:
                     _charge_gen_quota(svc, body.author)
                     ai_text = _ask_ai(q, _anchor_prompt(ctx_tree, node_id))
@@ -1556,7 +1567,7 @@ def create_app() -> FastAPI:
                                   if (source := svc.tree.nodes.get(s["id"])) is not None
                                   and source.space == "public"]
                 allowed = {s["id"] for s in public_sources}
-                n.knowledge = {**n.knowledge, "sources": public_sources,
+                n.knowledge = {**n.knowledge, "sources": public_sources, "background": "",
                                "relations": [r for r in n.knowledge.get("relations", [])
                                              if r["origin"] != "source" or r["source_id"] in allowed]}
             n.last_editor = body.author

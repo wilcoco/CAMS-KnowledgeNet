@@ -1,5 +1,6 @@
 """Evidence integrity, isolated retrieval, persistence and failure behaviour."""
 import copy
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -33,6 +34,7 @@ def fake_generate(question, sources, **kwargs):
                            "source_mode": ('none' if not sources else 'conversation'
                                            if all(s.get('selection')=='conversation' for s in sources)
                                            else 'user_selected'),
+                           "background": kwargs.get("background", ""),
                            "sources": copy.deepcopy(sources)}
 
 
@@ -217,17 +219,26 @@ def test_structured_provider_receives_question_sources_and_schema(monkeypatch, b
         def __init__(self, **kwargs): self.messages = self
         def __enter__(self): return self
         def __exit__(self, *args): pass
+        def stream(self, **kwargs):
+            seen['answer_request'] = kwargs
+            return self
+        def get_final_message(self):
+            return SimpleNamespace(stop_reason='end_turn', content=[SimpleNamespace(type='text',text=ANSWER)])
         def parse(self, **kwargs):
             seen.update(kwargs)
             raw = draft()
             if bad_graph:
                 raw['relations'][0]['quote'] = '원문에 없는 AI의 바꿔 쓴 구절'
-            return SimpleNamespace(stop_reason='end_turn', parsed_output=knowledge.AnswerMap.model_validate(raw))
+            raw.pop('answer')
+            return SimpleNamespace(stop_reason='end_turn', parsed_output=knowledge.MapOnly.model_validate(raw))
     monkeypatch.setattr(anthropic,'Anthropic',FakeClient)
     answer, data = knowledge.generate(QUESTION, [], api_key='not-a-real-key')
     assert answer == ANSWER and data['status'] == 'ai_proposed'
     assert data['source_mode'] == 'none'
-    assert seen['output_format'] is knowledge.AnswerMap
+    assert seen['output_format'] is knowledge.MapOnly
+    assert seen['answer_request']['thinking'] == {'type':'adaptive'}
+    assert 'output_format' not in seen['answer_request']
+    assert ANSWER in seen['messages'][0]['content']
     assert QUESTION in seen['messages'][0]['content']
     assert 'not-a-real-key' not in str(data)
     if bad_graph:
@@ -257,3 +268,82 @@ def test_answer_survives_when_no_graph_evidence_can_be_verified(client, monkeypa
     assert r.json()['node']['answer'] == ANSWER
     k = r.json()['node']['knowledge']
     assert k['concepts'] == [] and k['relations'] == [] and k['notice']
+
+
+def test_web_opt_in_and_background_reach_only_the_right_stage(client, monkeypatch):
+    received=[]
+    def capture(q, sources, **kwargs):
+        received.append(kwargs)
+        return fake_generate(q, sources, **kwargs)
+    monkeypatch.setattr(knowledge,'generate',capture)
+    n=ask(client, background='제조업 품질팀', web_search=True).json()['node']
+    assert received[-1]['web_search'] and received[-1]['background']=='제조업 품질팀'
+    assert ask(client, space='secret',web_search=True).status_code==200
+    assert not received[-1]['web_search']
+    client.post('/api/nodes/'+n['id']+'/contribute',json={
+        'kind':'followup','body':'실행 순서는?', 'author':'walker','with_knowledge':True})
+    assert received[-1]['background']=='제조업 품질팀'
+    assert not received[-1]['web_search']
+
+
+def test_research_uses_provider_citations_and_handles_pause_without_private_context():
+    seen=[]
+    class Block:
+        def __init__(self, **data): self.data=data
+        def model_dump(self): return self.data
+    class Client:
+        def __init__(self): self.messages=self
+        def create(self, **kwargs):
+            seen.append(copy.deepcopy(kwargs))
+            if len(seen)==1:
+                return SimpleNamespace(stop_reason='pause_turn',content=[Block(
+                    type='web_search_tool_result',content=[{'type':'web_search_result','encrypted_content':'opaque'}])])
+            return SimpleNamespace(stop_reason='end_turn',content=[
+                Block(type='text',text='근거 없는 요약',citations=[]),
+                Block(type='text',text='원문에서 확인한 내용',citations=[
+                    {'type':'web_search_result_location','url':'https://example.org/original',
+                     'title':'원저자 문서','cited_text':'확인한 원문'},
+                    {'type':'web_search_result_location','url':'javascript:alert(1)','title':'bad'}])])
+    result=knowledge.research_question(Client(),QUESTION)
+    assert seen[0]['messages']==[{'role':'user','content':QUESTION}]
+    assert seen[1]['messages'][1]['content'][0]['content'][0]['encrypted_content']=='opaque'
+    assert result['status']=='searched' and len(result['sources'])==1
+    assert '근거 없는 요약' not in result['summary']
+    linked=knowledge._link_citations('설명 [W1] 그리고 [W9]',result['sources'])
+    assert '[W1](<https://example.org/original>)' in linked and '[출처 확인 필요]' in linked
+
+
+def test_research_error_does_not_claim_verification():
+    class Client:
+        def __init__(self): self.messages=self
+        def create(self, **kwargs): raise TimeoutError()
+    result=knowledge.research_question(Client(),QUESTION)
+    assert result=={'status':'unavailable','summary':'','sources':[]}
+
+
+def test_graph_failure_retains_complete_answer_and_private_context_never_enters_search(monkeypatch):
+    import anthropic
+    research_requests=[]
+    answer_requests=[]
+    def research(client,q):
+        research_requests.append(q)
+        return {'status':'unavailable','summary':'','sources':[]}
+    monkeypatch.setattr(knowledge,'research_question',research)
+    class Client:
+        def __init__(self,**kwargs): self.messages=self
+        def __enter__(self): return self
+        def __exit__(self,*args): pass
+        def stream(self,**kwargs):
+            answer_requests.append(json.loads(kwargs['messages'][0]['content']))
+            return self
+        def get_final_message(self):
+            return SimpleNamespace(stop_reason='end_turn',content=[SimpleNamespace(type='text',text=ANSWER)])
+        def parse(self,**kwargs): raise TimeoutError()
+    monkeypatch.setattr(anthropic,'Anthropic',Client)
+    answer,k=knowledge.generate(QUESTION,[{'id':'p','excerpt':'내부 기록'}],api_key='test',
+                               background='팀의 목표',web_search=True)
+    assert research_requests==[QUESTION]
+    assert answer_requests[0]['sources'][0]['excerpt']=='내부 기록'
+    assert answer_requests[0]['background']=='팀의 목표'
+    assert answer==ANSWER and k['concepts']==[] and k['notice']
+    assert k['research_status']=='unavailable'
