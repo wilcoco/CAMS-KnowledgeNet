@@ -118,6 +118,21 @@ def test_source_snapshot_does_not_change_with_later_edit(client):
     assert client.get('/api/nodes/'+n['id']).json()['knowledge']['sources'][0]['excerpt'] == data['body']
 
 
+def test_publishing_answer_does_not_publish_private_source_snapshots(client):
+    private = client.post('/api/nodes', json={"title": "독서 모임 비밀 기록", "body": "비공개 자료의 내용",
+                                             "author": "writer", "space": "secret"}).json()
+    n = ask(client, space='secret').json()['node']
+    assert any(s['id'] == private['id'] for s in n['knowledge']['sources'])
+    with client.svc.writing():
+        client.svc.tree.nodes[n['id']].knowledge['relations'][0].update(
+            origin='source', source_id=private['id'], quote='비공개 자료의 내용')
+    published = client.post('/api/nodes/'+n['id']+'/publish', json={'author':'walker','space':'secret'})
+    assert published.status_code == 200
+    k = client.get('/api/nodes/'+n['id']).json()['knowledge']
+    assert not k['sources'] and not k['relations']
+    assert '비공개 자료의 내용' not in str(k)
+
+
 @pytest.mark.parametrize('exc,status', [(knowledge.Unavailable('AI 연결 없음'),503),(ValueError('bad graph'),502)])
 def test_failure_has_no_fake_answer_and_refunds_quota(client, monkeypatch, exc, status):
     monkeypatch.setenv('NIGHTWISH_ASK_QUOTA','1')

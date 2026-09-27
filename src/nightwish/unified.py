@@ -1536,6 +1536,16 @@ def create_app() -> FastAPI:
             if n.space == "public":
                 raise HTTPException(409, "이미 공용에 있습니다")
             n.space = "public"
+            # Publishing this answer does not publish other group documents or
+            # their stored source excerpts. Retain only already-public sources.
+            if n.knowledge:
+                public_sources = [s for s in n.knowledge.get("sources", [])
+                                  if (source := svc.tree.nodes.get(s["id"])) is not None
+                                  and source.space == "public"]
+                allowed = {s["id"] for s in public_sources}
+                n.knowledge = {**n.knowledge, "sources": public_sources,
+                               "relations": [r for r in n.knowledge.get("relations", [])
+                                             if r["origin"] != "source" or r["source_id"] in allowed]}
             n.last_editor = body.author
             svc.tree.bump()
             return _node_view(svc, node_id, "public", full=True)
