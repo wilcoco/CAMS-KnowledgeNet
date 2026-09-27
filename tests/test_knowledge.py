@@ -166,7 +166,8 @@ def test_inaccessible_followup_is_rejected_before_provider(client, monkeypatch):
     assert r.status_code == 404
 
 
-def test_structured_provider_receives_question_sources_and_schema(monkeypatch):
+@pytest.mark.parametrize('bad_graph', [False, True])
+def test_structured_provider_receives_question_sources_and_schema(monkeypatch, bad_graph):
     import anthropic
     seen = {}
     class FakeClient:
@@ -175,10 +176,40 @@ def test_structured_provider_receives_question_sources_and_schema(monkeypatch):
         def __exit__(self, *args): pass
         def parse(self, **kwargs):
             seen.update(kwargs)
-            return SimpleNamespace(stop_reason='end_turn', parsed_output=knowledge.AnswerMap.model_validate(draft()))
+            raw = draft()
+            if bad_graph:
+                raw['relations'][0]['quote'] = '원문에 없는 AI의 바꿔 쓴 구절'
+            return SimpleNamespace(stop_reason='end_turn', parsed_output=knowledge.AnswerMap.model_validate(raw))
     monkeypatch.setattr(anthropic,'Anthropic',FakeClient)
     answer, data = knowledge.generate(QUESTION, [], api_key='not-a-real-key')
     assert answer == ANSWER and data['status'] == 'ai_proposed'
     assert seen['output_format'] is knowledge.AnswerMap
     assert QUESTION in seen['messages'][0]['content']
     assert 'not-a-real-key' not in str(data)
+    if bad_graph:
+        assert data['relations'] == [] and data['omitted_count'] == 1
+        assert data['notice'] and data['concepts']
+
+
+def test_bad_concepts_and_sources_are_pruned_without_invented_edges():
+    raw = draft()
+    raw['concepts'][0]['quote'] = '질문을 바꿔 쓴 구절'
+    raw['relations'].append({**raw['relations'][0], 'origin':'source', 'source_id':'forged'})
+    data = knowledge.grounded_map(knowledge.AnswerMap.model_validate(raw), QUESTION, [])
+    assert [c['id'] for c in data['concepts']] == ['people']
+    assert data['relations'] == [] and data['omitted_count'] == 3
+
+
+def test_answer_survives_when_no_graph_evidence_can_be_verified(client, monkeypatch):
+    def partial(q, sources, **kw):
+        raw = draft(q)
+        for c in raw['concepts']: c['quote'] = '잘못된 구절'
+        result = knowledge.AnswerMap.model_validate(raw)
+        k = {**fake_generate(q, sources)[1], **knowledge.grounded_map(result,q,sources)}
+        return result.answer, k
+    monkeypatch.setattr(knowledge, 'generate', partial)
+    r = ask(client)
+    assert r.status_code == 200
+    assert r.json()['node']['answer'] == ANSWER
+    k = r.json()['node']['knowledge']
+    assert k['concepts'] == [] and k['relations'] == [] and k['notice']

@@ -182,7 +182,7 @@
   .err { color:var(--stub); font-size:12px; }
   code { background:#0c0e13; padding:1px 5px; border-radius:4px; }
 </style>
-<link rel="stylesheet" href="/static/knowledge-map.css?v=1" />
+<link rel="stylesheet" href="/static/knowledge-map.css?v=2" />
 </head>
 <body>
 <div id="busy"><span class="spinner"></span> <span id="busy-msg">AI가 답변을 생성하는 중…</span></div>
@@ -311,7 +311,7 @@
   </aside>
 </div>
 
-<script src="/static/knowledge-map.js?v=1"></script>
+<script src="/static/knowledge-map.js?v=2"></script>
 <script>
 const $ = s => document.querySelector(s);
 const api = async (m, url, body) => {
@@ -1075,6 +1075,7 @@ function fillPane(n, c){
       ${n.space && n.space!=='public' ? `<span class="badge">${esc(n.space)}</span>` : ''}
     </div>
     <div class="prov">${prov} · ${footprintLine(n)}</div>
+    ${n.knowledge && n.knowledge.notice ? `<div class="map-notice">${esc(n.knowledge.notice)}</div>` : ''}
     ${discovererLine(n)}
     ${coauthorsHTML(n.coauthors)}
     ${n.is_query ? '' : (n.is_stub

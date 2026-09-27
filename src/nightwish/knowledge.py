@@ -103,6 +103,42 @@ def validate_map(raw: dict, question: str, sources: list[dict]) -> AnswerMap:
     return result
 
 
+def grounded_map(result: AnswerMap, question: str, sources: list[dict]) -> dict:
+    """Keep the usable answer even when individual proposed edges lack evidence.
+
+    Pruning is explicit, never silently accepting an ungrounded relation. No
+    second model call is necessary to rescue an otherwise valid answer.
+    """
+    data = result.model_dump(exclude={"answer"})
+    originals = {"question": question, "answer": result.answer}
+    source_text = {s["id"]: s["excerpt"] for s in sources}
+    concepts, ids = [], set()
+    for c in result.concepts:
+        if c.id in ids or c.quote not in originals[c.origin]:
+            continue
+        ids.add(c.id)
+        concepts.append(c.model_dump())
+    relations = []
+    for r in result.relations:
+        if r.source not in ids or r.target not in ids or r.source == r.target:
+            continue
+        if r.origin == "source":
+            original = source_text.get(r.source_id)
+        else:
+            original = originals[r.origin] if not r.source_id else None
+        if original is not None and r.quote in original:
+            relations.append(r.model_dump())
+    omitted = len(result.concepts) + len(result.relations) - len(concepts) - len(relations)
+    if concepts:
+        validate_map({**result.model_dump(), "concepts": concepts, "relations": relations},
+                     question, sources)
+    data.update(concepts=concepts, relations=relations, omitted_count=omitted)
+    if omitted:
+        data["notice"] = (f"원문 근거를 확인하지 못한 개념·관계 {omitted}개는 지도에서 제외했습니다. "
+                          "답변은 AI 초안이며 검토가 필요합니다.")
+    return data
+
+
 def generate(question: str, sources: list[dict], *, api_key: str = "") -> tuple[str, dict]:
     from nightwish.llm import DEFAULT_MODEL, _llm_ready
 
@@ -122,10 +158,10 @@ def generate(question: str, sources: list[dict], *, api_key: str = "") -> tuple[
         )
     if msg.stop_reason != "end_turn" or msg.parsed_output is None:
         raise ValueError("incomplete structured answer")
-    result = validate_map(msg.parsed_output.model_dump(), question, sources)
+    result = msg.parsed_output
     return result.answer, {
         "version": 1, "status": "ai_proposed", "model": model,
         "question_text": question,
-        **result.model_dump(exclude={"answer"}),
+        **grounded_map(result, question, sources),
         "sources": sources,
     }

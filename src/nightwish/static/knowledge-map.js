@@ -64,7 +64,7 @@ function renderKnowledge(n){
   const panel = document.getElementById('knowledge-map');
   if (!panel) return false;
   if (knowledgeNodeId !== (n && n.id)) { knowledgeNodeId = n && n.id; knowledgeMode = 'auto'; clearMapHighlights(); }
-  const k = n && n.knowledge, hasMap = k && k.version === 1 && k.concepts.length;
+  const k = n && n.knowledge, hasMap = k && k.version === 1;
   const semantic = knowledgeMode === 'semantic' || (knowledgeMode === 'auto' && hasMap);
   document.getElementById('document-map').hidden = !!semantic;
   panel.hidden = !semantic;
@@ -81,6 +81,11 @@ function renderKnowledge(n){
   if(k.question.conditions.length) meaning.append(mapEl('p','질문의 조건 · '+k.question.conditions.join(' / ')));
   if(k.question.unknowns.length) meaning.append(mapEl('p','확인할 점 · '+k.question.unknowns.join(' / ')));
   panel.append(meaning,mapEl('p','개념이나 관계를 누르면 원문 구절을 확인할 수 있습니다.','prov'));
+  if(k.notice) panel.append(mapEl('p',k.notice,'map-notice'));
+  if(!k.concepts.length){
+    panel.append(mapEl('p','이 답에서는 근거가 확인된 개념을 만들지 못했습니다. 답변을 읽고 보강하거나 후속 질문으로 구체화해 주세요.','prov'));
+    return true;
+  }
   const NS = 'http://www.w3.org/2000/svg';
   function svgEl(tag, attrs, text){
     const e = document.createElementNS(NS,tag);
