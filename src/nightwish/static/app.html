@@ -1495,7 +1495,7 @@ if ($('#sort-adopted')) $('#sort-adopted').onchange = doSearch;
         el.removeEventListener('pointerup', up);
         localStorage.setItem(key,
           getComputedStyle(root).getPropertyValue(varName).trim());
-        renderEgo(EGO.data);            // 우측 폭이 바뀌면 지도 다시 그리기
+        if ($('#document-map').hidden === false) renderEgo(EGO.data);
       };
       el.addEventListener('pointermove', move);
       el.addEventListener('pointerup', up);
@@ -1503,7 +1503,7 @@ if ($('#sort-adopted')) $('#sort-adopted').onchange = doSearch;
     el.addEventListener('dblclick', () => {
       root.style.setProperty(varName, def);
       localStorage.removeItem(key);
-      renderEgo(EGO.data);
+      if ($('#document-map').hidden === false) renderEgo(EGO.data);
     });
   };
   wire($('#split-l'), '--left-w',  'nw_left_w',  false, 220, 620, '300px');
@@ -1512,7 +1512,9 @@ if ($('#sort-adopted')) $('#sort-adopted').onchange = doSearch;
 
 let _egoRz;
 window.addEventListener('resize', ()=>{
-  clearTimeout(_egoRz); _egoRz = setTimeout(()=> renderEgo(EGO.data), 200);
+  clearTimeout(_egoRz);
+  // The semantic cards reflow in CSS; rebuilding them would close the reader's selections.
+  _egoRz = setTimeout(()=> { if ($('#document-map').hidden === false) renderEgo(EGO.data); }, 200);
 });
 document.querySelectorAll('.ego-d').forEach(b => b.onclick = ()=>{
   localStorage.setItem('nw_ego_depth', b.dataset.d);
