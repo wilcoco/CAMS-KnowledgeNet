@@ -1,5 +1,5 @@
 /* Joint Q&A maps: textContent/SVG nodes only; model output is never HTML. */
-let knowledgeMode = 'auto', knowledgeNodeId = null, selectedMapTarget = null;
+let knowledgeMode = 'auto', knowledgeNodeId = null, selectedMapTarget = null, knowledgeFocusId = null;
 const participationNames={question:'후속 질문',evidence:'근거',condition:'적용 조건',counterexample:'다른 경험·반례'};
 const relationNames = {is_a:'일종이다',part_of:'일부이다',requires:'필요하다',
   influences:'영향을 준다',contradicts:'상충한다',related_to:'관련된다'};
@@ -100,11 +100,15 @@ function clearMapHighlights(){
 }
 function highlightMapQuote(n, quote, origin){
   clearMapHighlights();
+  if(origin==='source')return;
   const pane = [...document.querySelectorAll('.pane')].find(p=>p.dataset.nodeId === n.id);
   const root = pane && pane.querySelector(origin === 'question' ? '.node-head h3' : '.answer');
   if (!root || !quote) return;
   root.normalize();
-  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT,{
+    acceptNode:t=>t.parentElement?.closest('.answer-concept-nav,.answer-opening-caption,.answer-section-generic')
+      ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+  });
   const texts = []; while(walk.nextNode()) texts.push(walk.currentNode);
   const needle=quote.replace(/\[\[([^\]]+)\]\]/g,'$1')
     .replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/[*`]/g,'');
@@ -119,6 +123,7 @@ function highlightMapQuote(n, quote, origin){
     }
     offset+=length;
   }
+  return root.querySelector('mark.map-match');
 }
 function renderMapSources(n){
   const box = document.getElementById('map-sources'); if (!box) return;
@@ -165,7 +170,8 @@ function renderMapSources(n){
 function renderKnowledge(n){
   const panel = document.getElementById('knowledge-map');
   if (!panel) return false;
-  if (knowledgeNodeId !== (n && n.id)) { knowledgeNodeId = n && n.id; knowledgeMode = 'auto'; selectedMapTarget=null; clearMapHighlights(); }
+  if (knowledgeNodeId !== (n && n.id)) { knowledgeNodeId = n && n.id; knowledgeMode = 'auto'; selectedMapTarget=null; knowledgeFocusId=null; clearMapHighlights(); }
+  window.focusKnowledgeConcept = null;
   const k = n && n.knowledge, hasMap = k && k.version === 1;
   const semantic = knowledgeMode === 'semantic' || (knowledgeMode === 'auto' && hasMap);
   document.getElementById('document-map').hidden = !!semantic;
@@ -178,52 +184,46 @@ function renderKnowledge(n){
   if (!semantic) return false;
   panel.replaceChildren();
   if (!hasMap){ panel.append(mapEl('p','이 답에는 함께 생성된 개념 지도가 없습니다. 새 질문이나 후속 질문을 하면 답변과 지도가 함께 남습니다.','prov')); return true; }
-  panel.append(mapEl('div','AI가 제안한 개념·관계','map-kicker'),mapEl('h3',k.question.intent));
-  const meaning = mapEl('div',undefined,'map-meaning');
+  panel.append(mapEl('div','답변을 이해하는 지도','map-kicker'),mapEl('h3','한 개념씩 연결해 보기'),
+    mapEl('p','연결을 누르면 원문 설명이 열립니다. 다른 개념을 선택해 이어서 살펴보세요.','map-guide'));
+  const meaning = mapEl('details',undefined,'map-meaning');
+  meaning.append(mapEl('summary','질문의 뜻과 확인할 점'),mapEl('p',k.question.intent));
   if(k.question.conditions.length) meaning.append(mapEl('p','질문의 조건 · '+k.question.conditions.join(' / ')));
   if(k.question.unknowns.length) meaning.append(mapEl('p','확인할 점 · '+k.question.unknowns.join(' / ')));
-  panel.append(meaning,mapEl('p','개념·관계를 선택해 근거와 조건을 확인하고, 질문이나 경험을 보태세요.','prov'));
+  panel.append(meaning);
   if(k.notice) panel.append(mapEl('p',k.notice,'map-notice'));
   if(!k.concepts.length){
     panel.append(mapEl('p','이 답에서는 근거가 확인된 개념을 만들지 못했습니다. 답변을 읽고 보강하거나 후속 질문으로 구체화해 주세요.','prov'));
     return true;
   }
-  const NS = 'http://www.w3.org/2000/svg';
-  function svgEl(tag, attrs, text){
-    const e = document.createElementNS(NS,tag);
-    Object.entries(attrs||{}).forEach(([a,v])=>e.setAttribute(a,v));
-    if(text !== undefined) e.textContent = text; return e;
-  }
-  const svg = svgEl('svg',{viewBox:'0 0 320 350',role:'group','aria-label':'질문과 답변의 개념 관계 지도',class:'semantic-svg'});
-  const pos = new Map();
-  k.concepts.forEach((c,i)=>{const a = -Math.PI/2 + i*2*Math.PI/k.concepts.length;pos.set(c.id,{x:160+111*Math.cos(a),y:173+122*Math.sin(a)});});
-  const edges = [];
-  k.relations.forEach(r=>{
-    const a=pos.get(r.source),b=pos.get(r.target); if(!a||!b) return;
-    const length=Math.hypot(b.x-a.x,b.y-a.y),dx=(b.x-a.x)/length,dy=(b.y-a.y)/length;
-    const group=svgEl('g',{'data-from':r.source,'data-to':r.target,class:'semantic-edge'});
-    group.setAttribute('role','button');group.setAttribute('tabindex','0');
-    group.setAttribute('aria-label',relationLabel(k,r));
-    group.onclick=()=>showEvidence(r,relationLabel(k,r));
-    group.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();group.onclick();}};
-    group.append(svgEl('line',{x1:a.x,y1:a.y,x2:b.x,y2:b.y,class:'edge-hit'}));
-    group.append(svgEl('line',{x1:a.x+dx*20,y1:a.y+dy*20,x2:b.x-dx*24,y2:b.y-dy*24}));
-    const x=b.x-dx*24,y=b.y-dy*24;
-    group.append(svgEl('path',{d:`M ${x-dx*7-dy*4} ${y-dy*7+dx*4} L ${x} ${y} L ${x-dx*7+dy*4} ${y-dy*7-dx*4}`}));
-    group.append(svgEl('title',{},relationNames[r.type]));svg.append(group);edges.push(group);
-  });
-  const center=svgEl('g',{class:'semantic-center'});
-  center.append(svgEl('circle',{cx:160,cy:173,r:29}),svgEl('text',{x:160,y:170,'text-anchor':'middle'},'질문'),svgEl('text',{x:160,y:187,'text-anchor':'middle'},'↔ 답변'));
-  svg.append(center);
+  const concepts=new Map(k.concepts.map(c=>[c.id,c]));
+  // Retain original relation indexes: saved human contributions refer to them.
+  const relations=k.relations.map((r,index)=>({r,index})).filter(({r})=>concepts.has(r.source)&&concepts.has(r.target));
+  const degree=id=>relations.filter(({r})=>r.source===id||r.target===id).length;
+  if(!concepts.has(knowledgeFocusId)) knowledgeFocusId=k.concepts.reduce((a,b)=>degree(b.id)>degree(a.id)?b:a).id;
+  const graph=mapEl('div',undefined,'semantic-graph');
+  graph.setAttribute('role','group');graph.setAttribute('aria-label','선택한 개념과 연결된 관계');
   const detail=mapEl('div',undefined,'map-detail');detail.setAttribute('aria-live','polite');
+  detail.hidden=true;
   const conceptButtons=[];
-  function showEvidence(item,label){
+  function showEvidence(item,label,moveToEvidence=true){
     const targetKind=item.id?'concept':'relation',targetId=item.id||String(k.relations.indexOf(item));
     selectedMapTarget={kind:targetKind,id:targetId,revision:n.knowledge_revision};
-    highlightMapQuote(n,item.quote,item.origin);
-    edges.forEach(e=>e.classList.toggle('selected',item.id ? e.dataset.from===item.id||e.dataset.to===item.id : e.dataset.from===item.source&&e.dataset.to===item.target));
+    const mark=highlightMapQuote(n,item.quote,item.origin);
+    if(mark && moveToEvidence){
+      window.revealAnswerEvidence?.(mark);
+      if(window.matchMedia('(min-width:881px)').matches)mark.scrollIntoView({block:'center',behavior:'smooth'});
+    }
+    graph.querySelectorAll('.map-edge').forEach(e=>{
+      const active=targetKind==='relation'&&e.dataset.relationId===targetId;
+      e.classList.toggle('selected',active);e.setAttribute('aria-pressed',String(active));
+    });
     conceptButtons.forEach(([id,el])=>el.setAttribute('aria-pressed',String(id===item.id)));
-    detail.replaceChildren(mapEl('strong',label),mapEl('p',originNames[item.origin],'prov'),mapEl('blockquote',item.quote));
+    detail.hidden=false;
+    detail.replaceChildren(mapEl('div','선택한 내용의 원문','map-kicker'),mapEl('strong',label),mapEl('blockquote',item.quote),mapEl('p',originNames[item.origin],'prov'));
+    if(mark)detail.append(mapButton(item.origin==='question'?'질문에서 읽기':'답변에서 읽기',()=>{
+      setMobileSection('answer');window.revealAnswerEvidence?.(mark);mark.scrollIntoView({block:'center',behavior:'smooth'});
+    }));
     if(item.origin==='source'){
       const s=(k.sources||[]).find(s=>s.id===item.source_id);
       if(s) detail.append(mapEl('p','참고 자료: '+(s.title||'이전 대화')));
@@ -255,35 +255,73 @@ function renderKnowledge(n){
       }));detail.append(card);
     });
   }
-  k.concepts.forEach(c=>{
-    const p=pos.get(c.id),g=svgEl('g',{class:'semantic-node '+c.kind,role:'button',tabindex:'0','aria-label':c.label+' · '+conceptKinds[c.kind],'aria-pressed':'false'});
-    g.append(svgEl('circle',{cx:p.x,cy:p.y,r:19}),svgEl('text',{x:p.x,y:p.y+4,'text-anchor':'middle'},conceptKinds[c.kind]),svgEl('title',{},c.label));
-    const label=svgEl('text',{x:p.x,y:p.y+33,'text-anchor':'middle',class:'concept-label'});
-    const chars=Array.from(c.label);label.textContent=chars.slice(0,11).join('')+(chars.length>11?'…':'');g.append(label);
-    const count=mapContributions(n,'concept',c.id).length;
-    if(count)g.append(svgEl('text',{x:p.x+20,y:p.y-18,class:'participation-count'},'+'+count));
-    const select=()=>showEvidence(c,c.label);g.onclick=select;
-    g.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select();}};
-    conceptButtons.push([c.id,g]);svg.append(g);
-  });
-  panel.append(svg);
+  function renderGraph(){
+    const current=concepts.get(knowledgeFocusId),nearby=relations.filter(({r})=>r.source===current.id||r.target===current.id);
+    const expanded=nearby.some(({index},i)=>i>=3&&selectedMapTarget?.kind==='relation'&&selectedMapTarget.id===String(index));
+    graph.replaceChildren();
+    const focus=mapButton('',()=>showEvidence(current,current.label));
+    focus.className='semantic-node map-focus '+current.kind;focus.dataset.conceptId=current.id;
+    focus.setAttribute('aria-label',current.label+'의 원문 설명 보기');
+    focus.append(mapEl('span',`${conceptKinds[current.kind]} · 연결 ${nearby.length}개`,'map-focus-kind'),
+      mapEl('strong',current.label),mapEl('span','원문 설명 보기','map-focus-hint'));
+    const count=mapContributions(n,'concept',current.id).length;
+    if(count)focus.append(mapEl('span','참여 '+count,'participation-count'));
+    graph.append(focus);
+    if(!nearby.length)graph.append(mapEl('p','아직 확인된 연결이 없습니다. 이 개념의 설명부터 읽어 보세요.','prov'));
+    const branches=mapEl('div',undefined,'map-branches');
+    nearby.forEach(({r,index},position)=>{
+      const a=concepts.get(r.source),b=concepts.get(r.target),count=mapContributions(n,'relation',String(index)).length;
+      const edge=mapButton('',()=>showEvidence(r,relationLabel(k,r)));
+      edge.className='semantic-edge map-edge map-relation';edge.setAttribute('role','button');
+      edge.setAttribute('aria-label',relationLabel(k,r)+(count?` · 참여 ${count}`:''));
+      edge.setAttribute('aria-pressed',String(selectedMapTarget?.kind==='relation'&&selectedMapTarget.id===String(index)));
+      edge.dataset.from=r.source;edge.dataset.to=r.target;edge.dataset.relationId=String(index);
+      const endpoint=c=>{
+        const el=mapEl('span',undefined,'map-endpoint '+c.kind+(c.id===current.id?' is-focus':''));
+        el.append(mapEl('span',conceptKinds[c.kind],'map-endpoint-kind'),mapEl('strong',c.label));return el;
+      };
+      const link=mapEl('span',undefined,'map-link');
+      link.append(mapEl('span',relationNames[r.type]),mapEl('span','→','map-link-arrow'));
+      edge.append(endpoint(a),link,endpoint(b));
+      if(count)edge.append(mapEl('span',`참여 ${count}`,'map-edge-count'));
+      edge.hidden=position>=3&&!expanded;branches.append(edge);
+    });
+    graph.append(branches);
+    if(nearby.length>3){
+      const more=mapButton(expanded?'연결 접기':`연결 ${nearby.length-3}개 더 보기`,()=>{
+        const expanded=more.getAttribute('aria-expanded')==='true';
+        [...branches.children].forEach((row,i)=>row.hidden=!expanded?false:i>=3);
+        more.setAttribute('aria-expanded',String(!expanded));more.textContent=expanded?`연결 ${nearby.length-3}개 더 보기`:'연결 접기';
+      });
+      more.classList.add('map-more');more.setAttribute('aria-expanded',String(expanded));graph.append(more);
+    }
+    conceptButtons.forEach(([id,el])=>el.setAttribute('aria-pressed',String(id===current.id)));
+  }
+  function selectConcept(id,moveToEvidence=true){
+    const c=concepts.get(id);if(!c)return false;
+    selectedMapTarget={kind:'concept',id,revision:n.knowledge_revision};
+    knowledgeFocusId=id;renderGraph();showEvidence(c,c.label,moveToEvidence);return true;
+  }
+  window.focusKnowledgeConcept=(id,nodeId)=>{
+    if(nodeId && nodeId!==n.id)return false;
+    if(!selectConcept(id))return false;
+    setMobileSection('graph');
+    panel.closest('aside')?.scrollTo({top:0,behavior:'smooth'});
+    graph.querySelector('.map-focus')?.focus({preventScroll:true});return true;
+  };
+  panel.append(graph);
+  const picker=mapEl('details',undefined,'map-concept-picker');picker.open=k.concepts.length<=4;
+  picker.append(mapEl('summary',`다른 개념으로 살펴보기 · ${k.concepts.length}개`));
   const labels=mapEl('div',undefined,'map-concepts');
   k.concepts.forEach(c=>{const count=mapContributions(n,'concept',c.id).length;
-    const b=mapButton(c.label+(count?` · 참여 ${count}`:''),()=>showEvidence(c,c.label));conceptButtons.push([c.id,b]);labels.append(b);});
-  panel.append(labels,detail);
-  detail.append(mapEl('p','선택한 개념의 원문과 관계가 여기에 나타납니다.','prov'));
-  if(k.relations.length){
-    panel.append(mapEl('h4','관계 · 방향과 근거'));
-    k.relations.forEach((r,i)=>{
-      const a=k.concepts.find(c=>c.id===r.source),b=k.concepts.find(c=>c.id===r.target);
-      if(a&&b){const label=a.label+' → '+relationNames[r.type]+' → '+b.label;
-        const count=mapContributions(n,'relation',String(i)).length;
-        const btn=mapButton(label+(count?` · 참여 ${count}`:''),()=>showEvidence(r,label));btn.classList.add('map-relation');panel.append(btn);}
-    });
-  }
+    const b=mapButton(c.label+(count?` · 참여 ${count}`:''),()=>selectConcept(c.id));
+    b.dataset.conceptId=c.id;conceptButtons.push([c.id,b]);labels.append(b);
+  });
+  picker.append(labels);panel.append(picker,detail,mapEl('p','AI가 답변에서 정리한 연결입니다. 원문과 사람의 경험으로 확인해 주세요.','map-proposal-note'));
+  renderGraph();
   if(selectedMapTarget?.revision===n.knowledge_revision){
     const item=selectedMapTarget.kind==='concept' ? k.concepts.find(c=>c.id===selectedMapTarget.id) : k.relations[Number(selectedMapTarget.id)];
-    if(item)showEvidence(item,item.id?item.label:relationLabel(k,item));
+    if(item)showEvidence(item,item.id?item.label:relationLabel(k,item),false);
   }
   return true;
 }

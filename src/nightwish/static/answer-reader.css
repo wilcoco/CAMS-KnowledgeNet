@@ -1,0 +1,39 @@
+.answer-reader-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:18px 0 9px}
+.answer-reader-description{display:grid;gap:3px;min-width:0}
+.answer-reader-description strong{font-size:14px;color:var(--fg)}
+.answer-reader-description span{font-size:12px;color:var(--mut);line-height:1.5}
+.answer-reader-toggle{flex-shrink:0;font-size:12px!important;min-height:36px}
+.answer.markdown-answer.answer-reader{border:0;padding:0;background:transparent}
+.answer-opening{padding:16px 18px;margin-bottom:13px;border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:9px;background:var(--panel)}
+.answer-opening::before{content:'답변의 도입';display:block;font-size:11px;color:var(--mut);margin-bottom:8px}
+.answer-opening>:last-child{margin-bottom:0}
+.answer-opening h1{font-size:1.08em;margin:.4em 0 .7em}
+.answer-opening p{font-size:14px;line-height:1.85}
+.answer-concept-nav{padding:3px 0 13px;margin-top:10px}
+.answer-concept-label{display:block;color:var(--mut);font-size:12px;margin-bottom:7px}
+.answer-concept-buttons{display:flex;flex-wrap:wrap;gap:6px}
+.answer-concept-button{font-size:12px!important;line-height:1.45!important;padding:7px 10px!important;max-width:100%;overflow-wrap:anywhere;text-align:left}
+.answer-concept-button:hover,.answer-concept-button:focus-visible{border-color:var(--acc);color:var(--acc)}
+.answer-section{border:1px solid var(--line);border-radius:9px;margin:9px 0;background:var(--panel);scroll-margin-top:16px}
+.answer-section-heading{display:flex;align-items:baseline;gap:10px;padding:13px 14px;cursor:pointer;list-style:none;line-height:1.55}
+.answer-section-heading::-webkit-details-marker{display:none}
+.answer-section-generic::before{content:attr(data-label)}
+.answer-section-heading[data-index]::before{content:attr(data-index);color:var(--mut);font-size:11px;font-variant-numeric:tabular-nums;flex-shrink:0}
+.answer-section-heading::after{content:'＋';color:var(--mut);margin-left:auto;flex-shrink:0;font-size:15px;line-height:1}
+.answer-section[open]>.answer-section-heading::after{content:'−';color:var(--acc)}
+.answer-section-heading:hover{background:rgba(122,162,255,.06);border-radius:8px}
+.answer-section-heading:focus-visible,.answer-reader-toggle:focus-visible,.answer-concept-button:focus-visible{outline:2px solid var(--acc);outline-offset:3px}
+.markdown-answer .answer-section-heading>h1,.markdown-answer .answer-section-heading>h2,.markdown-answer .answer-section-heading>h3,.markdown-answer .answer-section-heading>h4,.markdown-answer .answer-section-heading>h5,.markdown-answer .answer-section-heading>h6,.answer-section-generic{margin:0;font-size:14px;line-height:1.6;font-weight:600;overflow-wrap:anywhere}
+.answer-section[open]>.answer-section-heading{border-bottom:1px solid var(--line)}
+.answer-section-content{padding:2px 16px 14px;font-size:14px;line-height:1.85;min-width:0}
+.answer-section-content>:last-child{margin-bottom:0}
+.answer-section-content h3:first-child{margin-top:1em}
+@media(max-width:560px){
+  .answer-reader-toolbar{align-items:flex-start;gap:8px;margin-top:14px}
+  .answer-reader-description span{max-width:190px}
+  .answer-reader-toggle{padding:6px 9px!important;font-size:11px!important}
+  .answer-opening{padding:13px}
+  .answer-opening p,.answer-section-content{font-size:14px}
+  .answer-section-heading{padding:12px 10px;gap:7px}
+  .answer-section-content{padding:2px 12px 12px}
+}
